@@ -1,0 +1,5 @@
+project = "review-fixture"
+default_env = "local"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"

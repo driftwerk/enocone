@@ -425,7 +425,7 @@ pub async fn review_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<
     for f in flows_of(&app, &project)?.iter().filter(|f| matches!(f.stage.as_str(), "draft" | "review")) {
         let open = open_comments_on(&app, &project, &f.id)?;
         list.push_str(&format!(
-            r#"<a class="row" href="/{}/flows/#flow={}"><span class="t"><b>{}</b><span class="small muted">{}</span></span>{}<span class="chip {stage}">{stage}</span></a>"#,
+            r#"<a class="row" href="/{}/review/{}"><span class="t"><b>{}</b><span class="small muted">{}</span></span>{}<span class="chip {stage}">{stage}</span></a>"#,
             esc(&project.slug),
             esc(&pages::urlenc(&f.id)),
             esc(&f.title),

@@ -10,6 +10,7 @@ mod db;
 mod mail;
 mod oidc;
 mod pages;
+mod review;
 mod runs;
 
 use std::net::SocketAddr;
@@ -142,6 +143,9 @@ impl App {
             .route("/{slug}/members/remove", post(members_remove))
             .route("/{slug}/publish", get(runs::publish_page))
             .route("/{slug}/review", get(runs::review_page))
+            .route("/{slug}/review/{flow}", get(review::flow_review_page))
+            .route("/{slug}/review/{flow}/comments", post(review::add_comment))
+            .route("/{slug}/comments/{id}/resolve", post(review::resolve))
             .route("/{slug}/flows", get(runs::flows_redirect))
             .route("/{slug}/flows/", get(runs::flows_page))
             .route("/{slug}/runs/{run}", get(runs::run_redirect))
@@ -636,7 +640,7 @@ async fn members_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<Str
         "Private to the people and GitHub teams below. Everyone else gets “not found”.",
         &invite,
     );
-    let roles = r#"<div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))"><div class="panel" style="background:var(--ink);color:#fff;border:0"><b>Owner</b><span class="small" style="color:var(--lav2)">Members, roles, linked repository</span></div><div class="panel" style="background:var(--iris-bg);border:0;color:#2E2280"><b>Member</b><span class="small">Publishes runs, comments, resolves</span></div><div class="panel" style="background:var(--amber-bg);border:0;color:#5A3B06"><b>Reviewer</b><span class="small">Reads, comments, resolves</span></div></div>"#;
+    let roles = r#"<div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))"><div class="panel" style="background:var(--ink);color:#fff;border:0"><b>Owner</b><span class="small" style="color:var(--lav2)">Members, roles, linked repository</span></div><div class="panel" style="background:var(--iris-bg);border:0;color:#2E2280"><b>Member</b><span class="small">Publishes runs, comments, resolves</span></div><div class="panel" style="background:var(--amber-bg);border:0;color:#5A3B06"><b>Reviewer</b><span class="small">Reads and comments</span></div></div>"#;
     Ok(html(pages::shell(&nav, &format!("Members · {}", project.name), &format!(r#"{head}<div class="body">{roles}<div class="list" aria-label="Members">{list}</div></div>"#))))
 }
 
