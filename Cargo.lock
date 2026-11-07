@@ -787,7 +787,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tokio",
  "tracing",
  "uuid",
@@ -835,7 +835,7 @@ dependencies = [
  "serde_json",
  "serde_json_path",
  "serde_norway",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "thiserror",
 ]
 
