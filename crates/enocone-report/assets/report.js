@@ -405,7 +405,7 @@
   function screenFigure(sc, caption) {
     const name = sc.title || sc.name || "mockup";
     return h("figure", { class: "mockfig", role: "figure", "aria-label": `Mockup: ${sc.name || name}` },
-      h("div", { class: "mockwrap" }, winbar(screenUrl(sc)), screenFrame(sc)),
+      h("div", { class: "mockwrap" }, winbar(screenUrl(sc)), viewportFrame(sc)),
       h("figcaption", { class: "small" }, caption || "Design", " · ", name));
   }
   function stepDesigns(s, r) {
@@ -588,7 +588,7 @@
         h("div", { class: "shead" }, h("span", { class: "intent" }, s.number ? h("span", { class: "n" }, `${s.number}.`) : null, s.intent), r && r.duration_ms ? h("span", { class: "small" }, fmtMs(r.duration_ms)) : null),
         s.notes ? h("div", { class: "note" }, s.notes) : null,
         stepDesigns(s, r),
-        !s.blocks.length ? h("div", { class: "note pend" }, "Not implemented yet. This step describes agreed behaviour; an http, browser, expect, use, exec or email block will make it executable.") : null,
+        !s.blocks.length && !opts.designing ? h("div", { class: "note pend" }, "Not implemented yet. This step describes agreed behaviour; an http, browser, expect, use, exec or email block will make it executable.") : null,
         how,
         r && r.error ? h("div", { class: "err" }, r.error.message) : null,
         r && r.note && status !== "passed" && s.blocks.length ? h("div", { class: "note" }, r.note) : null,
@@ -647,7 +647,7 @@
       (f.questions || []).length ? h("section", { class: "questions", "aria-labelledby": "oq" }, h("h2", { id: "oq" }, `Open questions (${f.questions.length})`), h("ol", null, f.questions.map((q) => h("li", null, inline(q))))) : null,
       (f.notes || []).map((n) => h("section", { class: "sec" }, h("h2", null, n.heading), md(n.markdown))),
       f.sections.map((sec) => h("section", { class: "sec", "aria-label": sec.kind }, h("h2", null, sec.kind),
-        sec.steps.map((s) => renderStep(s, executed ? res.get(s.key) : null, { flowId: f.id, open: s.key === targetStep || (!targetStep && res.get(s.key)?.status === "failed"), target: s.key === targetStep })))),
+        sec.steps.map((s) => renderStep(s, executed ? res.get(s.key) : null, { flowId: f.id, designing: st === "draft" || st === "review", open: s.key === targetStep || (!targetStep && res.get(s.key)?.status === "failed"), target: s.key === targetStep })))),
       h("details", null, h("summary", { class: "small" }, `Source: ${f.path}`), h("pre", { class: "code", style: "margin-top:8px" }, f.source)));
 
     const a = fr.attempts[attemptIdx];
