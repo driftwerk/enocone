@@ -1,0 +1,36 @@
+/* enocone's own look, used by the mockups in e2e/screens: the report as a document. */
+:root {
+  --paper: #FBFAF7; --paper2: #F3F1EC; --rule: #E4E0D8; --ink: #0E1424; --ink3: #2A3550; --muted: #5F6678;
+  --iris: #5B3DF0; --iris-bg: #EEEAFF; --pass: #15803D; --pass-bg: #E5F4EA; --fail: #C2410C; --fail-bg: #FDEBE1;
+  --skip: #9AA0AE; --skip-bg: #ECEAE5; --head: #0E1424;
+}
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 Inter, system-ui, sans-serif; }
+.top { background: radial-gradient(90% 180% at 88% 0%, #3B2F8F 0%, rgba(59,47,143,0) 60%), var(--head); color: #F5F3FF; padding: 14px 32px; display: flex; gap: 22px; align-items: center; font-size: 13px; }
+.top b { font-size: 17px; }
+.top .m { color: #C9C4E6; }
+.page { max-width: 980px; margin: 24px auto; background: #fff; border: 1px solid var(--rule); border-radius: 6px; padding: 36px 44px; box-shadow: 0 18px 40px -18px rgba(14,20,36,.12); }
+.kicker { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--iris); margin-bottom: 6px; }
+h1 { font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 34px; line-height: 1.08; margin: 0 0 10px; letter-spacing: -.02em; }
+.lede { font-family: Fraunces, Georgia, serif; font-size: 17px; color: var(--ink3); margin: 0 0 18px; }
+.banner { border-radius: 8px; padding: 11px 14px; font-weight: 600; font-size: 14px; margin-bottom: 18px; }
+.banner.pass { background: var(--pass-bg); color: var(--pass); } .banner.fail { background: var(--fail-bg); color: var(--fail); } .banner.pend { background: var(--iris-bg); color: #4B3BB3; }
+.fig { border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+.fig .cap { font-size: 10.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+.chart { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.box { border: 1.6px solid var(--skip); background: var(--skip-bg); border-radius: 10px; padding: 9px 14px; font-weight: 600; font-size: 13px; position: relative; }
+.box.pass { border-color: var(--pass); background: var(--pass-bg); } .box.fail { border-color: var(--fail); background: var(--fail-bg); }
+.box.plan { border: 1.6px dashed var(--iris); background: #fff; } .box.pic { border-style: dotted; background: #fff; }
+.box i { position: absolute; right: -9px; top: -9px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 11px; color: #fff; background: var(--skip); }
+.box.pass i { background: var(--pass); } .box.fail i { background: var(--fail); } .box.plan i { background: #fff; color: var(--iris); border: 1.5px solid var(--iris); }
+.arrow { color: var(--skip); font-size: 18px; }
+.sec { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--iris); border-bottom: 1px solid var(--rule); padding-bottom: 6px; margin: 18px 0 8px; }
+.step { display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid #EFECE6; font-weight: 600; }
+.mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; color: #fff; background: var(--pass); flex: none; }
+.mark.fail { background: var(--fail); } .mark.skip { background: var(--skip); } .mark.plan { background: #fff; border: 1.5px dashed var(--iris); color: var(--iris); }
+.win { border: 1px solid #D9DBE3; border-radius: 8px; overflow: hidden; background: #fff; }
+.win .bar { height: 24px; background: #F1F2F5; border-bottom: 1px solid #E3E5EA; display: flex; gap: 5px; align-items: center; padding: 0 8px; }
+.win .bar span { width: 8px; height: 8px; border-radius: 50%; background: #D5D8DF; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cap2 { font-size: 12px; color: var(--muted); margin-top: 5px; } .cap2 b { color: var(--ink); }
+.term { background: var(--head); color: #D9DCF0; border-radius: 8px; padding: 14px 16px; font: 12.5px/1.6 "JetBrains Mono", ui-monospace, monospace; white-space: pre; }
+.term .ok { color: #5CC98B; } .term .bad { color: #FF8A7A; } .term .dim { color: #8B94A5; }

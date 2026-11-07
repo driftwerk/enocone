@@ -13,9 +13,16 @@ Reviewers agree on behaviour much faster when they can see the screen. An AI
 writes each mockup as a small HTML file using the project's theme, so it looks
 like the product rather than a generic wireframe.
 
+```flowchart
+flowchart LR
+  1[Theme and screen in the project] --> 2[Docs carry the mockup on its step] --> 3[Shown sandboxed in the product's colours]
+  3 --> 4[Step stays pending until it has a check]
+  1 --> 5[render-screen gives the agent a PNG]
+```
+
 ## Rules
 
-- A ```screen block names a mockup: `screen: quote` loads
+- A `screen` block names a mockup: `screen: quote` loads
   `screens/quote.html`, or `html: |` holds it inline.
 - The project's `theme/` folder supplies the look: `theme.css` (CSS
   variables) and/or `tokens.json` in the W3C design-token format, which is
@@ -52,6 +59,10 @@ like the product rather than a generic wireframe.
 ## Then
 
 3. **Step 2 shows the mockup in a sandboxed frame, coloured with the theme's primary colour**
+   ```screen
+   screen: report-mockup
+   title: A step with its mockup
+   ```
    ```browser
    - goto: "file://{{run.tmp}}/docs/index.html#flow=quote"
    - expect: { role: figure, name: "Mockup: quote" }

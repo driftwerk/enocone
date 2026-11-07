@@ -13,6 +13,11 @@ The point of a mockup is to agree what will be built. Once the step runs, the
 report should show what was actually built next to it, so anyone can see
 whether they match.
 
+```flowchart
+flowchart LR
+  1[A step shows a mockup and opens the real page] --> 2[The run passes and keeps a screenshot] --> 3[Designed and Built, side by side]
+```
+
 ## Rules
 
 - A step that has both a screen and a screenshot from the run shows them side
@@ -44,6 +49,10 @@ whether they match.
 ## Then
 
 3. **The report shows “Designed” and “Built” side by side for that step**
+   ```screen
+   screen: report-dvb
+   title: Designed and built on one step
+   ```
    ```browser
    - goto: "file://{{run.tmp}}/out/index.html#flow=pay"
    - expect: { role: group, name: Designed and built }

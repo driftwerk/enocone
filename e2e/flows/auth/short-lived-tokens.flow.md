@@ -14,6 +14,12 @@ five minutes. A suite that signs in once would start failing partway through.
 enocone should fetch a fresh token from the signed-in browser session before
 the old one expires.
 
+```flowchart
+flowchart LR
+  1[Tokens expire after 2 seconds] --> 2[Call, wait, call again] --> 3[The token was refreshed from the browser session]
+  2 -.->|refresh fails| fail[A clear message, not a bare 401]
+```
+
 ## Rules
 
 - A browser auth profile's `token` can say `refresh = "60s"`. After that age,
@@ -44,6 +50,10 @@ the old one expires.
 ## Then
 
 3. **Both calls succeed, and the second used a different token**
+   ```screen
+   screen: token-refresh
+   title: When a refresh fails, the step says why
+   ```
    ```exec
    run: |
      cat "{{run.tmp}}/out/results.json"

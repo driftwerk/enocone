@@ -13,9 +13,15 @@ Many journeys start in an inbox: a quote to accept, a password to reset, an
 invitation. Test emails go to a sandbox rather than real people. A flow reads
 the latest one for an address and follows its link, just as the client would.
 
+```flowchart
+flowchart LR
+  1[The product sends Jane an email] --> 2[The flow waits for it and keeps the link] --> 3[The browser opens the link]
+  2 -.->|nothing arrives in time| 4[Fails, listing what the mailbox had]
+```
+
 ## Rules
 
-- An ```email block waits for the latest message to an address, checks its
+- An `email` block waits for the latest message to an address, checks its
   subject and body, and captures links or text:
   `capture: { accept_link: { link: "/accept/" } }`.
 - Mailboxes are configured per project under `[email]`: Postmark (a sandbox
@@ -36,6 +42,10 @@ the latest one for an address and follows its link, just as the client would.
 ## When
 
 2. **The flow waits for Jane's email and captures the acceptance link**
+   ```screen
+   screen: email-record
+   title: The email as the report shows it
+   ```
    ```exec
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --id quote-email --out "{{run.tmp}}/out" && cat "{{run.tmp}}/out/results.json"

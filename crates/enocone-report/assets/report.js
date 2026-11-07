@@ -40,7 +40,7 @@
   // Tiny, safe Markdown: paragraphs, lists, **bold**, `code`, [links](url).
   function inline(text) {
     const out = [];
-    const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\))/g;
+    const re = /(\*\*([^*]+)\*\*|`+([^`]+)`+|\[([^\]]+)\]\(([^)\s]+)\))/g;
     let last = 0, m;
     while ((m = re.exec(text))) {
       if (m.index > last) out.push(text.slice(last, m.index));
@@ -55,11 +55,15 @@
   }
   function md(text) {
     const box = h("div", { class: "md" });
+    const item = /^\s*([-*]|\d+\.)\s+/;
     for (const block of String(text || "").split(/\n\s*\n/)) {
       const lines = block.split("\n").filter((l) => l.trim());
       if (!lines.length) continue;
-      if (lines.every((l) => /^\s*([-*]|\d+\.)\s+/.test(l))) {
-        box.append(h("ul", null, lines.map((l) => h("li", null, inline(l.replace(/^\s*([-*]|\d+\.)\s+/, ""))))));
+      if (item.test(lines[0])) {
+        // List items may wrap onto following lines.
+        const items = [];
+        for (const l of lines) { if (item.test(l)) items.push(l.replace(item, "")); else items[items.length - 1] += " " + l.trim(); }
+        box.append(h(/^\s*\d+\./.test(lines[0]) ? "ol" : "ul", null, items.map((t) => h("li", null, inline(t)))));
       } else {
         box.append(h("p", null, inline(lines.join(" "))));
       }
@@ -168,7 +172,7 @@
 
     const pct = (n) => (s.total ? (100 * n) / s.total : 0);
     const summary = h("section", { "aria-labelledby": "sum", style: "display:flex;flex-direction:column;gap:14px" },
-      h("div", { style: "display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px" }, h("h1", { id: "sum", class: "big display" }, headline), h("p", { class: "sub" }, subline)),
+      h("div", { style: "display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px" }, h("div", { style: "flex-basis:100%" , class: "kicker" }, executed ? "Run report" : "Flow documents"), h("h1", { id: "sum", class: "big display" }, headline), h("p", { class: "sub" }, subline)),
       executed ? h("div", { class: "bar", role: "img", "aria-label": `${s.passed} passed, ${s.flaky} flaky, ${s.failed} failed, ${s.pending || 0} pending, ${s.skipped} skipped` },
         h("div", { style: `width:${pct(s.passed)}%;background:var(--pass)` }), h("div", { style: `width:${pct(s.flaky)}%;background:var(--flaky)` }),
         h("div", { style: `width:${pct(s.failed)}%;background:var(--fail)` }), h("div", { style: `width:${pct(s.pending || 0)}%;background:var(--pend)` }),
@@ -307,7 +311,8 @@
       n.w = Math.max(n.shape === "diamond" ? 140 : 112, longest * 7.4 + (n.shape === "diamond" ? 56 : 32));
       n.h = n.lines.length * 18 + (n.shape === "diamond" ? 44 : 26);
     }
-    const longestLabel = Math.max(0, ...edges.map((e) => (e.label || "").length));
+    for (const e of edges) e.lines = e.label ? wrap(e.label, 18) : [];
+    const longestLabel = Math.max(0, ...edges.flatMap((e) => e.lines.map((l) => l.length)));
     const GAP_MAIN = vertical ? 64 : Math.max(64, longestLabel * 6.4 + 52), GAP_CROSS = 22, PAD = 20;
     const size = ranks.map((list) => Math.max(...list.map((n) => (vertical ? n.h : n.w))));
     const span = ranks.map((list) => list.reduce((a, n) => a + (vertical ? n.w : n.h), 0) + GAP_CROSS * (list.length - 1));
@@ -323,7 +328,7 @@
     });
     const W = (vertical ? maxSpan : main - GAP_MAIN) + PAD * 2, H = (vertical ? main - GAP_MAIN : maxSpan) + PAD * 2;
     const mid = `ah${Math.random().toString(36).slice(2, 8)}`;
-    const root = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, class: "chart-svg", role: "presentation" },
+    const root = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, class: "chart-svg", role: "presentation", style: `min-width:${Math.min(W, Math.round(W * 0.75))}px` },
       sv("defs", null, sv("marker", { id: mid, markerWidth: 9, markerHeight: 9, refX: 8, refY: 4.5, orient: "auto" }, sv("path", { d: "M0,0 L9,4.5 L0,9 z", class: "chart-arrow" }))));
     for (const e of edges) {
       const a = byId.get(e.from), b = byId.get(e.to);
@@ -344,8 +349,9 @@
         // Midpoint of the cubic: (P0 + 3·P1 + 3·P2 + P3) / 8.
         const p = d.match(/-?[\d.]+/g).map(Number);
         const mx = (p[0] + 3 * p[2] + 3 * p[4] + p[6]) / 8, my = (p[1] + 3 * p[3] + 3 * p[5] + p[7]) / 8;
-        const tw = e.label.length * 6.4 + 12;
-        root.append(sv("g", { class: "chart-elabel" }, sv("rect", { x: mx - tw / 2, y: my - 10, width: tw, height: 20, rx: 6 }), sv("text", { x: mx, y: my + 4, "text-anchor": "middle" }, e.label)));
+        const tw = Math.max(...e.lines.map((l) => l.length)) * 6.4 + 12, th = e.lines.length * 15 + 6;
+        root.append(sv("g", { class: "chart-elabel" }, sv("rect", { x: mx - tw / 2, y: my - th / 2, width: tw, height: th, rx: 6 }),
+          e.lines.map((l, i) => sv("text", { x: mx, y: my - th / 2 + 15 + i * 15, "text-anchor": "middle" }, l))));
       }
     }
     for (const n of nodes) {
@@ -394,10 +400,12 @@
     requestAnimationFrame(fit);
     return box;
   }
+  const winbar = (url) => h("div", { class: "winbar", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("span", { class: "url" }, url || ""));
+  const screenUrl = (sc) => (sc.path ? sc.path.replace(/\{(\w+)\}/g, (_, k) => k) : `screen: ${sc.name || "mockup"}`);
   function screenFigure(sc, caption) {
     const name = sc.title || sc.name || "mockup";
     return h("figure", { class: "mockfig", role: "figure", "aria-label": `Mockup: ${sc.name || name}` },
-      h("div", { class: "mockwrap" }, screenFrame(sc)),
+      h("div", { class: "mockwrap" }, winbar(screenUrl(sc)), screenFrame(sc)),
       h("figcaption", { class: "small" }, caption || "Design", " · ", name));
   }
   function stepDesigns(s, r) {
@@ -407,8 +415,8 @@
     const parts = [];
     if (screens.length && r && r.screenshot) {
       parts.push(h("div", { class: "dvb", role: "group", "aria-label": "Designed and built" },
-        h("figure", { class: "mockfig", role: "figure", "aria-label": `Designed: ${screens[0].name || "mockup"}` }, h("div", { class: "mockwrap" }, viewportFrame(screens[0])), h("figcaption", { class: "small" }, h("strong", null, "Designed"), " · the mockup agreed in review")),
-        h("figure", { class: "mockfig built", role: "figure", "aria-label": "Built: screenshot from this run" }, h("div", { class: "mockwrap" }, h("img", { src: r.screenshot, alt: `Built: ${s.intent}`, onclick: (e) => zoom(e.target.src) })), h("figcaption", { class: "small" }, h("strong", null, "Built"), " · screenshot from this run"))));
+        h("figure", { class: "mockfig", role: "figure", "aria-label": `Designed: ${screens[0].name || "mockup"}` }, h("div", { class: "mockwrap" }, winbar(screenUrl(screens[0])), viewportFrame(screens[0])), h("figcaption", { class: "small" }, h("strong", null, "Designed"), " · the mockup agreed in review")),
+        h("figure", { class: "mockfig built", role: "figure", "aria-label": "Built: screenshot from this run" }, h("div", { class: "mockwrap" }, winbar(r.page_url || ""), h("img", { src: r.screenshot, alt: `Built: ${s.intent}`, onclick: (e) => zoom(e.target.src) })), h("figcaption", { class: "small" }, h("strong", null, "Built"), " · screenshot from this run"))));
       screens.slice(1).forEach((sc) => parts.push(screenFigure(sc)));
     } else screens.forEach((sc) => parts.push(screenFigure(sc)));
     return h("div", { class: "designs" }, parts);
@@ -535,6 +543,15 @@
     return lines;
   }
 
+  const COMMENTS = DATA.comments || [];
+  function commentsFor(flowId, stepKey) {
+    const list = COMMENTS.filter((c) => c.flow === flowId && (stepKey ? c.step === stepKey : !c.step));
+    if (!list.length) return null;
+    return h("div", { class: "comments", role: "list", "aria-label": "Review comments" }, list.map((c) =>
+      h("div", { class: `comment${c.resolved ? " resolved" : ""}`, role: "listitem" },
+        h("div", { class: "who" }, c.author || "Reviewer", c.at ? h("span", null, new Date(c.at).toLocaleDateString()) : null, c.resolved ? h("span", null, "resolved") : null),
+        md(c.text))));
+  }
   function renderStep(s, r, opts) {
     const status = r ? r.status : executed ? "skipped" : "not-run";
     const isPending = !s.blocks.length || status === "pending";
@@ -564,7 +581,8 @@
         h("div", { class: "sbody" }, h("div", { class: "shead" }, h("span", { class: "intent" }, c.intent), h("span", { class: "small" }, fmtMs(cr.duration_ms))),
           cr.error ? h("div", { class: "err" }, cr.error.message) : null));
     })) : null;
-    return h("div", { class: `step is-${isPending ? "pending" : status}${opts.target ? " target" : ""}`, id: `step-${s.key}` },
+    const notes = commentsFor(opts.flowId, s.key);
+    return h("div", { class: `step is-${isPending ? "pending" : status}${opts.target ? " target" : ""}${notes ? " has-comments" : ""}`, id: `step-${s.key}` },
       h("span", { class: `mark ${markCls}`, "aria-label": isPending ? "Pending" : statusLabel(status), title: isPending ? "Pending" : statusLabel(status) }, markIcon),
       h("div", { class: "sbody" },
         h("div", { class: "shead" }, h("span", { class: "intent" }, s.number ? h("span", { class: "n" }, `${s.number}.`) : null, s.intent), r && r.duration_ms ? h("span", { class: "small" }, fmtMs(r.duration_ms)) : null),
@@ -577,7 +595,7 @@
         children,
         r && r.screenshot && !(s.designs || []).some((d) => d.screen) ? h("figure", { class: "shot" }, h("img", { src: r.screenshot, alt: `Screenshot after: ${s.intent}`, loading: "lazy", onclick: (e) => zoom(e.target.src) }),
           h("figcaption", { class: "small" }, "Screenshot after this step", r.page_url ? ` · ${r.page_url}` : "")) : null,
-        detail));
+        detail), notes);
   }
 
   function zoom(src) {
@@ -615,9 +633,10 @@
           meta.priority ? h("span", { class: "tag", style: "color:var(--fail-fg);background:var(--fail-bg);font-weight:600" }, meta.priority) : null,
           h("span", { class: "stage" }, stageLabel[st]),
           meta.owner ? h("span", { class: "small" }, `owner: ${meta.owner}`) : null, meta.ticket ? h("span", { class: "small" }, `ticket: ${meta.ticket}`) : null),
+        h("div", { class: "kicker" }, [meta.area || "Flow", stageLabel[st]].join(" · ")),
         h("h1", { class: "display" }, f.title),
         f.why ? h("div", { class: "why" }, md(f.why)) : null,
-        banner),
+        banner, commentsFor(f.id, null)),
       flowDesigns(f, (key) => {
         if (!executed) return "planned";
         const step = steps.find((x) => x.key === key);
@@ -628,7 +647,7 @@
       (f.questions || []).length ? h("section", { class: "questions", "aria-labelledby": "oq" }, h("h2", { id: "oq" }, `Open questions (${f.questions.length})`), h("ol", null, f.questions.map((q) => h("li", null, inline(q))))) : null,
       (f.notes || []).map((n) => h("section", { class: "sec" }, h("h2", null, n.heading), md(n.markdown))),
       f.sections.map((sec) => h("section", { class: "sec", "aria-label": sec.kind }, h("h2", null, sec.kind),
-        sec.steps.map((s) => renderStep(s, executed ? res.get(s.key) : null, { open: s.key === targetStep || (!targetStep && res.get(s.key)?.status === "failed"), target: s.key === targetStep })))),
+        sec.steps.map((s) => renderStep(s, executed ? res.get(s.key) : null, { flowId: f.id, open: s.key === targetStep || (!targetStep && res.get(s.key)?.status === "failed"), target: s.key === targetStep })))),
       h("details", null, h("summary", { class: "small" }, `Source: ${f.path}`), h("pre", { class: "code", style: "margin-top:8px" }, f.source)));
 
     const a = fr.attempts[attemptIdx];

@@ -12,9 +12,19 @@ script. An `exec` step runs a command, checks its exit code and output, and
 keeps values for later steps. It is off unless the project allows it, because
 a flow (or an AI agent trying one out) could otherwise run anything.
 
+```flowchart
+flowchart LR
+  1[An exec step runs a command] --> ok[Exit code and output checked, values kept]
+  2[A project without allow_exec] --> no[The step fails and says how to allow it]
+```
+
 ## When
 
 1. **The binary under test reports its version**
+   ```screen
+   screen: exec-record
+   title: A command step in the report
+   ```
    ```exec
    run: |
      "{{env.ENOCONE_BIN}}" --version

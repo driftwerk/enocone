@@ -37,6 +37,8 @@ pub fn render_html(results: &RunResults, assets_root: &Path, opts: &ReportOption
     let mut html = String::with_capacity(json.len() + CSS.len() + JS.len() + 1024);
     html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     let _ = writeln!(html, "<title>{}</title>", escape(&title));
+    // Fonts load when online; offline the report falls back to Georgia and the system sans.
+    html.push_str("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap\">\n");
     html.push_str("<meta name=\"generator\" content=\"enocone\">\n<style>\n");
     html.push_str(CSS);
     html.push_str("\n</style>\n</head>\n<body>\n<div id=\"app\"><noscript>This report needs JavaScript. The raw data is in results.json.</noscript></div>\n");

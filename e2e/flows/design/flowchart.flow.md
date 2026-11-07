@@ -9,14 +9,21 @@ approved_by: Kingsley Hendrickse (2026-11-06)
 
 # A flow chart in the document turns green as its steps pass
 
-People understand a journey faster from a picture than from a list. The chart
-lives in the flow document as text, so it is reviewed and diffed like the
-words, and each box is tied to a step so the report can colour it with that
-step's result. The chart can never drift from the steps.
+People understand a journey faster from a picture than from a list of steps.
+A flow chart lives in the flow document as text, so it is reviewed and diffed
+like the words around it. Each box can be tied to a step, so after a run the
+report colours it with that step's result: the picture can never drift from
+what the steps actually check.
+
+```flowchart
+flowchart LR
+  1[Author ties boxes to steps] --> 2[The flow runs] --> 3[Results carry each box's step] --> 4[Report colours the boxes]
+  1 -.->|box points at a missing step| 5[validate names the line]
+```
 
 ## Rules
 
-- The chart is written in a ```flowchart block using a subset of Mermaid:
+- The chart is written in a `flowchart` block using a subset of Mermaid:
   `A[Label] --> B[Label]`, dotted `-.->`, decisions `{Label}`, `%%` comments,
   and `direction LR` or `TD`.
 - A box whose id is a step number (`3[Pays by card]`, or `s3`) is tied to
@@ -63,6 +70,10 @@ step's result. The chart can never drift from the steps.
    ```
 
 4. **The report shows the chart under the flow's title with those colours**
+   ```screen
+   screen: report-chart
+   title: A flow page with its chart
+   ```
    ```browser
    - goto: "file://{{run.tmp}}/out/index.html#flow=chart"
    - expect: { role: figure, name: Flow chart }

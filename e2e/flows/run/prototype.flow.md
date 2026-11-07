@@ -13,6 +13,12 @@ If the browser steps already pass against the clickable prototype, we know the
 steps and the agreed screens fit together before any code is written. When
 the feature is built, the very same steps run against the real app.
 
+```flowchart
+flowchart LR
+  1[Draft flow with screens and a storyboard] --> 2[run --prototype serves the screens] --> 3[Browser steps pass, backend steps skipped]
+  3 -.->|later, the real app without the feature| 4[The same steps fail]
+```
+
 ## Rules
 
 - `enocone run --prototype` serves the flow's screens at the paths they
@@ -45,6 +51,10 @@ the feature is built, the very same steps run against the real app.
 ## Then
 
 3. **Its browser steps pass and its http steps are skipped as “prototype: no backend”**
+   ```screen
+   screen: proto-run
+   title: A prototype run in the report
+   ```
    ```exec
    run: |
      cat "{{run.tmp}}/proto/results.json"
