@@ -40,6 +40,8 @@ pub struct Config {
     pub data: PathBuf,
     /// The site owner: may always sign in, sees and creates every project.
     pub owner_email: Option<String>,
+    /// The site owner's GitHub login, as an alternative to the email.
+    pub owner_github: Option<String>,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     /// github.com and its API (overridable so tests can point them at a stand-in).
@@ -72,10 +74,9 @@ impl Config {
         o.split("://").nth(1).unwrap_or(&o).to_string()
     }
     fn is_owner(&self, u: &User) -> bool {
-        match (&self.owner_email, &u.email) {
-            (Some(o), Some(e)) => o.eq_ignore_ascii_case(e),
-            _ => false,
-        }
+        let by_email = matches!((&self.owner_email, &u.email), (Some(o), Some(e)) if o.eq_ignore_ascii_case(e));
+        let by_login = matches!((&self.owner_github, &u.github_login), (Some(o), Some(l)) if o.eq_ignore_ascii_case(l));
+        by_email || by_login
     }
 }
 

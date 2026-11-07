@@ -144,7 +144,7 @@ pub async fn callback(State(app): State<App>, h: HeaderMap, Query(q): Query<Call
     let login = gh.login.to_lowercase();
 
     // Is there any grant for this identity? (Nothing is written before this check.)
-    let owner = app.cfg.owner_email.as_deref().is_some_and(|o| verified.iter().any(|e| e.eq_ignore_ascii_case(o)));
+    let owner = app.cfg.owner_email.as_deref().is_some_and(|o| verified.iter().any(|e| e.eq_ignore_ascii_case(o))) || app.cfg.owner_github.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(&login));
     let allowed = owner
         || app.db.with(|c| {
             let mut n: i64 = c.query_row("SELECT COUNT(*) FROM members WHERE kind = 'github' AND subject = ?1", [&login], |r| r.get(0))?;
@@ -157,6 +157,7 @@ pub async fn callback(State(app): State<App>, h: HeaderMap, Query(q): Query<Call
             Ok(n > 0)
         })?;
     if !allowed {
+        eprintln!("[enocone serve] GitHub sign-in refused for @{login}: no grant ({} verified email(s), {} team(s) visible)", verified.len(), teams.len());
         return refuse(&app, &format!("@{} isn't on any project here", gh.login), "Ask a project owner to invite your GitHub account, a verified email address on it, or one of your GitHub teams.");
     }
 

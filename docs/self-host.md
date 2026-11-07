@@ -24,6 +24,7 @@ Everything comes from environment variables (or the matching `--flags`; see
 | `ENOCONE_LISTEN` | Where to listen, default `127.0.0.1:8080`. |
 | `ENOCONE_DATA` | The data folder: `enocone.db` (SQLite) and `runs/`. Back this up. |
 | `ENOCONE_OWNER_EMAIL` | The site owner. They can always sign in and create projects. |
+| `ENOCONE_OWNER_GITHUB` | The owner's GitHub login, if they sign in with GitHub (their verified GitHub emails are matched against `ENOCONE_OWNER_EMAIL` too). |
 | `ENOCONE_POSTMARK_TOKEN` | Postmark server token. Without it, sign-in emails are written to the log. |
 | `ENOCONE_MAIL_FROM` | From address of sign-in emails (default `noreply@` the site's host). |
 | `ENOCONE_GITHUB_CLIENT_ID`, `ENOCONE_GITHUB_CLIENT_SECRET` | GitHub OAuth app, for GitHub sign-in and team grants. |
@@ -97,12 +98,16 @@ Postmark set up it arrives by email. Without it, the link is in the log:
 journalctl -u enocone -n 20 --no-pager
 ```
 
-Or print a link directly. Run it as the `enocone` user with the same
-environment, so files in the data folder stay owned by the service:
+Or print a link directly, as root. It reads the environment, then runs as
+the `enocone` user so files in the data folder stay owned by the service:
 
 ```sh
-sudo -u enocone sh -c 'set -a; . /etc/enocone/env; exec enocone serve --sign-in-link you@example.com'
+set -a; . /etc/enocone/env; set +a
+sudo --preserve-env=ENOCONE_DATA,ENOCONE_PUBLIC_URL -u enocone enocone serve --sign-in-link you@example.com
 ```
+
+Quote values with spaces in `/etc/enocone/env` (`ENOCONE_MAIL_FROM="enocone <login@example.com>"`)
+so the file can be sourced like this.
 
 Then create a project and invite your team from its Members page.
 

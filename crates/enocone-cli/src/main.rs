@@ -183,6 +183,9 @@ struct ServeArgs {
     /// The site owner: may always sign in and creates projects.
     #[arg(long, env = "ENOCONE_OWNER_EMAIL")]
     owner_email: Option<String>,
+    /// The site owner's GitHub login (instead of, or as well as, the email).
+    #[arg(long, env = "ENOCONE_OWNER_GITHUB")]
+    owner_github: Option<String>,
     #[arg(long, env = "ENOCONE_GITHUB_CLIENT_ID", hide_env_values = true)]
     github_client_id: Option<String>,
     #[arg(long, env = "ENOCONE_GITHUB_CLIENT_SECRET", hide_env_values = true)]
@@ -239,6 +242,7 @@ async fn serve(a: &ServeArgs) -> anyhow::Result<i32> {
         listen: a.listen,
         data: a.data.clone(),
         owner_email: non_empty(&a.owner_email).map(|e| e.to_lowercase()),
+        owner_github: non_empty(&a.owner_github).map(|l| l.trim_start_matches('@').to_lowercase()),
         github_client_id: non_empty(&a.github_client_id),
         github_client_secret: non_empty(&a.github_client_secret),
         github_url: a.github_url.trim_end_matches('/').to_string(),
