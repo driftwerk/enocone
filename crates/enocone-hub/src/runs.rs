@@ -628,7 +628,7 @@ project = <span class="s">"{slug}"</span>
 
 <span class="k">steps:</span>
   - uses: actions/checkout@v4
-  - uses: driftwerk/enocone@v1
+  - uses: driftwerk/enocone@v0
     with:
       project: e2e
       publish: <span class="s">true</span></pre></section></div>

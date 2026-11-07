@@ -132,7 +132,7 @@ permissions:
   id-token: write
 steps:
   - uses: actions/checkout@v4
-  - uses: driftwerk/enocone@v1
+  - uses: driftwerk/enocone@v0
     with:
       project: e2e
       publish: true

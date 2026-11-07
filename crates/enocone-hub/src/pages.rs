@@ -38,6 +38,27 @@ fn brand(site: &str) -> String {
     format!(r#"<a class="brand" href="/" aria-label="{} home">{MARK_ON_DARK}<span class="wordmark">eno<em>c</em>one</span></a>"#, esc(site))
 }
 
+/// The home page for signed-out visitors: what enocone is, with the sign-in card.
+pub fn home(site: &str, github: bool, retention_days: u32, error: Option<&str>) -> String {
+    let gh_block = if github {
+        format!(
+            r#"<a href="/auth/github?next=%2F" class="h-btn" style="background:#0E1424;color:#fff">{GITHUB}Continue with GitHub</a>
+        <div style="display:flex;align-items:center;gap:12px;color:#5F6678;font-size:13px"><span style="flex:1;height:1px;background:#E4E0D8"></span>or, without a GitHub account<span style="flex:1;height:1px;background:#E4E0D8"></span></div>"#
+        )
+    } else {
+        String::new()
+    };
+    let gh_cta = if github { r#"<a href="/auth/github?next=%2F" class="h-btn" style="background:#FBFAF7;color:#0E1424">Continue with GitHub</a>"# } else { "" };
+    let err = error.map(|e| format!(r#"<div class="notice fail" role="alert">{}</div>"#, esc(e))).unwrap_or_default();
+    let body = include_str!("../assets/home.html")
+        .replace("{{SITE}}", &esc(site))
+        .replace("{{GITHUB_BLOCK}}", &gh_block)
+        .replace("{{GITHUB_CTA}}", gh_cta)
+        .replace("{{ERROR}}", &err)
+        .replace("{{RETENTION}}", &retention_days.to_string());
+    doc(&format!("{site}: the spec your team reviews is the test that runs"), &body)
+}
+
 /// The sign-in page: a cover with the pitch, and the sign-in card.
 pub fn login(site: &str, github: bool, next: &str, error: Option<&str>) -> String {
     let gh = if github {

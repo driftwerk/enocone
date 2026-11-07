@@ -515,7 +515,10 @@ async fn cli_authorize(State(app): State<App>, h: HeaderMap, Form(q): Form<CliAu
 // ------------------------------------------------------------------ projects
 
 async fn home(State(app): State<App>, h: HeaderMap) -> R {
-    let user = require_user(&app, &h, "/")?;
+    let Some(user) = current_user(&app, &h)? else {
+        let github = app.cfg.github_client_id.is_some() && app.cfg.github_client_secret.is_some();
+        return Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, None)));
+    };
     let projects = visible_projects(&app, &user)?;
     let owner = app.cfg.is_owner(&user);
     let mut list = String::new();

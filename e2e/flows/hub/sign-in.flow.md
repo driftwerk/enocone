@@ -60,7 +60,7 @@ flowchart LR
    expect: { stdout: seeded }
    ```
    ```browser
-   - goto: "http://127.0.0.1:18182/"
+   - goto: "http://127.0.0.1:18182/login"
    - expect: { heading: Welcome }
    - expect: { button: Email me a sign-in link }
    - screenshot

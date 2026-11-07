@@ -1,0 +1,223 @@
+<div class="home">
+
+  <!-- ============ Cover: what it is + sign in ============ -->
+  <header class="cover">
+    <div class="h-wrap" style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:22px;padding-bottom:22px;flex-wrap:wrap">
+      <a href="/" aria-label="{{SITE}} home" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+        <svg width="32" height="32" viewBox="0 0 48 48" aria-hidden="true"><path d="M5 10 L21 24 L5 38 Z" fill="#8F7BFF"></path><ellipse cx="5" cy="24" rx="3" ry="14" fill="#B9ACFF"></ellipse><path d="M43 10 L27 24 L43 38 Z" fill="#8F7BFF"></path><ellipse cx="43" cy="24" rx="3" ry="14" fill="#B9ACFF"></ellipse><circle cx="24" cy="24" r="4.2" fill="none" stroke="#FFFFFF" stroke-width="2"></circle></svg>
+        <span class="serif" style="font-size:22px;color:#fff">eno<em style="font-style:italic;font-weight:400;color:#B9ACFF">c</em>one</span>
+      </a>
+      <nav aria-label="Site" style="display:flex;align-items:center;gap:26px;font-size:14.5px;flex-wrap:wrap">
+        <a href="#how" style="color:#C9C4E6;text-decoration:none">How it works</a>
+        <a href="#review" style="color:#C9C4E6;text-decoration:none">Review</a>
+        <a href="#run" style="color:#C9C4E6;text-decoration:none">Run and publish</a>
+        <a href="#self-host" style="color:#C9C4E6;text-decoration:none">Self-host</a>
+        <a href="#signin" class="h-btn" style="min-height:38px;padding:0 14px;background:rgba(255,255,255,.08);border:1px solid rgba(185,172,255,.4);color:#fff">Sign in</a>
+      </nav>
+    </div>
+
+    <div class="h-wrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:56px;padding-top:56px;padding-bottom:96px">
+      <div style="flex:1 1 460px;display:flex;flex-direction:column;gap:24px;max-width:620px">
+        <div class="kicker">Business flows, written down</div>
+        <h1 class="serif" style="font-size:62px;line-height:1.02;color:#fff">The spec your team reviews <em style="font-style:italic;font-weight:400;color:#B9ACFF">is the test that runs.</em></h1>
+        <p class="lede">enocone flows are plain documents: why a journey matters, the rules, and the steps in sentences anyone can read. AI fills in the steps, the flow runs against your app, and its chart turns green as the steps pass.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <span class="h-chip" style="color:#B9ACFF;border:1px solid #B9ACFF">Draft</span><span style="color:#6E7591">→</span>
+          <span class="h-chip" style="color:#F2C46D;border:1px solid #F2C46D">Review</span><span style="color:#6E7591">→</span>
+          <span class="h-chip" style="color:#93B4FF;border:1px solid #93B4FF">Approved</span><span style="color:#6E7591">→</span>
+          <span class="h-chip" style="color:#7DD9A6;border:1px solid #7DD9A6">Implemented</span>
+        </div>
+        <p style="margin:0;font-size:13.5px;color:#9C97BD">Open source · MIT or Apache-2.0 · <a href="#self-host" style="color:#B9ACFF">run your own with enocone serve</a></p>
+      </div>
+
+      <section id="signin" aria-labelledby="signin-h" style="flex:0 1 420px;background:#FBFAF7;color:#0E1424;border-radius:16px;padding:34px 32px 28px;display:flex;flex-direction:column;gap:14px;box-shadow:0 30px 80px -30px rgba(0,0,0,.7)">
+        <div class="kicker">Sign in</div>
+        <h2 id="signin-h" class="serif" style="font-size:30px;line-height:1.1">Your team's flows</h2>
+        {{GITHUB_BLOCK}}
+        {{ERROR}}<form method="post" action="/login/email" style="display:flex;flex-direction:column;gap:12px;margin:0"><input type="hidden" name="next" value="/">
+        <label for="email" style="font-size:13.5px;font-weight:600">Work email</label>
+        <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@company.com" style="min-height:48px;border:1px solid #CFC9BD;border-radius:10px;padding:0 14px;font:15px Inter,sans-serif;box-sizing:border-box;width:100%">
+        <button type="submit" class="h-btn" style="background:#5B3DF0;color:#fff;border:0;cursor:pointer">Email me a sign-in link</button></form>
+        <p style="margin:0;font-size:12.5px;line-height:1.5;color:#5F6678">Projects are private. Only people a project owner invites, or members of a GitHub team it's shared with, can sign in.</p>
+      </section>
+    </div>
+  </header>
+
+  <!-- ============ A flow, as people read it ============ -->
+  <section id="how" class="h-sec" style="border-top:0">
+    <div class="h-wrap h-two">
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="kicker">One document</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08">A flow reads like a page, <em style="font-style:italic;font-weight:400;color:#5B3DF0">not like code</em></h2>
+        <p class="lede">Product owners, testers and developers read the same thing: the outcome as a title, why it matters, the rules, then numbered steps. The blocks that make it run sit underneath, folded away.</p>
+        <p style="margin:0;font-size:14px;color:#5F6678">This one is from enocone's own suite: enocone is specified and tested with enocone.</p>
+      </div>
+      <article class="h-paper" aria-label="Example flow document" style="padding:34px 36px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px"><span class="kicker">Hosted site</span><span class="h-chip" style="background:#E5F4EA;color:#116632">Implemented · 7 of 7 passed</span></div>
+        <h3 class="serif" style="font-size:28px;line-height:1.12">A run is published to enoc.one from a laptop or from CI</h3>
+        <p style="margin:0;font-family:Fraunces,Georgia,serif;font-size:16.5px;line-height:1.55;color:#2A3550">A report on someone's laptop or buried in CI artifacts is hard to discuss. <code style="font-size:13.5px;background:#F3F1EC;padding:1px 5px;border-radius:4px">enocone publish</code> sends a run to the team's site, where everyone sees the same pages.</p>
+        <figure style="margin:4px 0;padding:14px;border:1px solid #EFECE6;border-radius:10px;background:#FBFAF7" aria-label="Flow chart">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#5F6678;margin-bottom:8px">Flow chart</div>
+          <svg viewBox="0 0 560 150" width="100%" role="img" aria-label="Laptop and CI both publish; the run appears on the project page">
+            <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#15803D"></path></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA0B0"></path></marker></defs>
+            <g font-family="Inter,sans-serif" font-size="11.5" fill="#0E1424">
+              <rect x="4" y="12" width="132" height="40" rx="8" fill="#E5F4EA" stroke="#15803D" stroke-width="1.6"></rect><text x="70" y="36" text-anchor="middle">enocone login</text>
+              <rect x="166" y="12" width="132" height="40" rx="8" fill="#E5F4EA" stroke="#15803D" stroke-width="1.6"></rect><text x="232" y="36" text-anchor="middle">enocone publish</text>
+              <rect x="4" y="96" width="294" height="40" rx="8" fill="#E5F4EA" stroke="#15803D" stroke-width="1.6"></rect><text x="151" y="120" text-anchor="middle">CI with publish: true</text>
+              <rect x="342" y="54" width="210" height="40" rx="8" fill="#E5F4EA" stroke="#15803D" stroke-width="1.6"></rect><text x="447" y="78" text-anchor="middle">Run on the project page</text>
+              <path d="M136 32H162" stroke="#15803D" stroke-width="1.6" marker-end="url(#ah)"></path>
+              <path d="M298 32C320 32 320 66 338 70" stroke="#15803D" stroke-width="1.6" fill="none" marker-end="url(#ah)"></path>
+              <path d="M298 116C320 116 320 86 338 80" stroke="#15803D" stroke-width="1.6" fill="none" marker-end="url(#ah)"></path>
+            </g>
+          </svg>
+        </figure>
+        <ol style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px;font-size:14.5px">
+          <li style="display:flex;gap:10px;align-items:center"><span class="h-mark h-pass">✓</span>Priya is a member of shop and has run enocone login</li>
+          <li style="display:flex;gap:10px;align-items:center"><span class="h-mark h-pass">✓</span>Priya runs the prototype and publishes it</li>
+          <li style="display:flex;gap:10px;align-items:center"><span class="h-mark h-pass">✓</span>The CI workflow for acme/shop runs with publish: true</li>
+          <li style="display:flex;gap:10px;align-items:center"><span class="h-mark h-pass">✓</span>An upload containing an HTML file is refused</li>
+        </ol>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ Stages ============ -->
+  <section class="h-sec" style="background:#F3F1EC">
+    <div class="h-wrap" style="display:flex;flex-direction:column;gap:32px">
+      <div style="display:flex;flex-direction:column;gap:12px;max-width:760px">
+        <div class="kicker">From idea to green</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08">Agree on behaviour first. <em style="font-style:italic;font-weight:400;color:#5B3DF0">Then build it.</em></h2>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px">
+        <div class="h-card" style="padding:22px;display:flex;flex-direction:column;gap:8px;border-top:4px solid #6B4EFF"><span class="h-chip" style="align-self:flex-start;border:1px solid #5B3DF0;color:#5B3DF0">Draft</span><b class="serif" style="font-size:19px">Sentences and mockups</b><span style="font-size:14px;line-height:1.5;color:#2A3550">Steps in plain words, screens drawn in your product's own style, a storyboard of how one leads to the next.</span></div>
+        <div class="h-card" style="padding:22px;display:flex;flex-direction:column;gap:8px;border-top:4px solid #F2C46D"><span class="h-chip" style="align-self:flex-start;border:1px solid #8A5A12;color:#8A5A12">Review</span><b class="serif" style="font-size:19px">Comments in the margin</b><span style="font-size:14px;line-height:1.5;color:#2A3550">The team clicks through the prototype and comments beside the rule or step they mean.</span></div>
+        <div class="h-card" style="padding:22px;display:flex;flex-direction:column;gap:8px;border-top:4px solid #2563EB"><span class="h-chip" style="align-self:flex-start;border:1px solid #2563EB;color:#1D4ED8">Approved</span><b class="serif" style="font-size:19px">Signed off in git</b><span style="font-size:14px;line-height:1.5;color:#2A3550">stage: approved and approved_by in the flow file, reviewed like any other change.</span></div>
+        <div class="h-card" style="padding:22px;display:flex;flex-direction:column;gap:8px;border-top:4px solid #15803D"><span class="h-chip" style="align-self:flex-start;background:#E5F4EA;color:#116632">Implemented</span><b class="serif" style="font-size:19px">Every step runs</b><span style="font-size:14px;line-height:1.5;color:#2A3550">Browser, HTTP, email and command steps check the real app. The chart goes green step by step.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Designed vs built ============ -->
+  <section class="h-sec">
+    <div class="h-wrap h-two">
+      <figure aria-label="Designed and built, side by side" style="margin:0;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#5B3DF0">Designed</div>
+          <div class="h-win"><div class="h-bar"><i></i><i></i><i></i><span>/login</span></div>
+            <div style="padding:18px 16px;display:flex;flex-direction:column;gap:9px;background:repeating-linear-gradient(45deg,#FBFAF7,#FBFAF7 8px,#F6F4EF 8px,#F6F4EF 16px)">
+              <div style="height:12px;width:60%;background:#0E1424;border-radius:3px"></div>
+              <div style="height:34px;border:1.5px dashed #6B4EFF;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#5B3DF0">Continue with GitHub</div>
+              <div style="height:30px;border:1.5px dashed #9AA0B0;border-radius:7px"></div>
+              <div style="height:34px;border:1.5px dashed #6B4EFF;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#5B3DF0">Email me a sign-in link</div>
+            </div></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#15803D">Built · passed</div>
+          <div class="h-win" style="border-color:#9CD3AE"><div class="h-bar"><i></i><i></i><i></i><span>enoc.one/login</span></div>
+            <div style="padding:18px 16px;display:flex;flex-direction:column;gap:9px;background:#0E1424">
+              <div class="serif" style="font-size:15px;color:#fff">Welcome</div>
+              <div style="height:34px;border-radius:7px;background:#FBFAF7;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">Continue with GitHub</div>
+              <div style="height:30px;border-radius:7px;background:#1A2236;border:1px solid #2A3550"></div>
+              <div style="height:34px;border-radius:7px;background:#5B3DF0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff">Email me a sign-in link</div>
+            </div></div>
+        </div>
+      </figure>
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="kicker">Designed, then built</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08">The mockup you agreed, <em style="font-style:italic;font-weight:400;color:#5B3DF0">beside the real screen</em></h2>
+        <p class="lede">After a passing run, each step shows the screenshot next to the mockup that was signed off. Anyone can see whether they match, without opening the app.</p>
+        <p style="margin:0;font-size:14px;color:#5F6678">Before the feature exists, the same browser steps run against the clickable prototype.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Review ============ -->
+  <section id="review" class="h-sec" style="background:#0E1424;color:#E9E7F5;border-top:0">
+    <div class="h-wrap h-two">
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="kicker" style="color:#F2C46D">Review together</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08;color:#fff">Comments stay <em style="font-style:italic;font-weight:400;color:#F2C46D">beside the words they're about</em></h2>
+        <p class="lede" style="color:#C9C4E6">Quote a rule, ask a question, reply. When the flow changes, a comment on text that's gone is marked outdated, still readable. People without GitHub sign in with a one-time email link.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="background:#1A2236;border:1px solid #2A3550;border-radius:12px;padding:16px 18px;font-family:Fraunces,Georgia,serif;font-size:16px;color:#E9E7F5"><span style="font-family:Inter,sans-serif;font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#9C97BD;display:block;margin-bottom:6px">Rules</span>The link in the quote email expires after <mark style="background:rgba(242,196,109,.28);color:#fff;border-bottom:2px solid #F2C46D;padding:0 2px">30 days</mark>.</div>
+        <article style="background:#FBFAF7;color:#0E1424;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;border:1px solid #F0E2B6">
+          <div style="display:flex;align-items:center;gap:10px"><span style="width:32px;height:32px;border-radius:50%;background:#F2C46D;color:#3A2A06;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">S</span><span style="flex:1;font-size:13px"><b>Sam</b> <span style="color:#5F6678">reviewer · Rules</span></span><span class="h-chip" style="background:#F3F1EC;color:#5F6678">Outdated</span></div>
+          <blockquote style="margin:0;border-left:3px solid #F2C46D;padding:4px 10px;background:#FDF3DC;border-radius:0 6px 6px 0;font-family:Fraunces,Georgia,serif;font-size:14.5px">expires after 14 days</blockquote>
+          <p style="margin:0;font-size:14.5px;line-height:1.5">14 days is too short for conveyancing; clients often wait for a mortgage offer.</p>
+          <div style="display:flex;gap:10px;padding-left:12px;border-left:2px solid #E4E0D8"><span style="width:26px;height:26px;border-radius:50%;background:#6B4EFF;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex:none">P</span><span style="font-size:13.5px"><b>Priya</b> Agreed, I'll make it 30 days.</span></div>
+          
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Run and publish ============ -->
+  <section id="run" class="h-sec" style="border-top:0">
+    <div class="h-wrap" style="display:flex;flex-direction:column;gap:36px">
+      <div style="display:flex;flex-direction:column;gap:12px;max-width:780px">
+        <div class="kicker">Run anywhere, read in one place</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08">From a laptop or CI, <em style="font-style:italic;font-weight:400;color:#5B3DF0">every run lands here</em></h2>
+        <p class="lede">A run sends its results and screenshots, never HTML; the site draws every page itself. In GitHub Actions there's no secret to store: GitHub vouches for the workflow.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:20px">
+        <pre class="h-term"><span class="p">$</span> enocone run
+enocone · env: local
+  <span class="s">✓</span> A flow chart in the document turns green as its steps pass
+  <span class="s">✓</span> Teammates sign in with GitHub or a one-time email link
+  <span class="s">✓</span> Reviewers comment beside a draft flow
+  <span class="s">✓</span> A run is published to enoc.one from a laptop or from CI
+  <span class="c">… 9 more</span>
+
+<span class="s">13 passed</span>   0 failed   0 pending
+
+<span class="p">$</span> enocone publish
+published 13 flows and 26 screenshots
+<span class="k">https://enoc.one/enocone/runs/1/</span></pre>
+        <pre class="h-term"><span class="c"># .github/workflows/e2e.yml</span>
+<span class="k">permissions:</span>
+  contents: read
+  id-token: write   <span class="c"># GitHub vouches; no secret</span>
+
+<span class="k">steps:</span>
+  - uses: actions/checkout@v4
+  - uses: driftwerk/enocone@v0
+    with:
+      project: e2e
+      publish: <span class="s">true</span></pre>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px">
+        <div class="h-card" style="padding:18px 20px"><div style="font-size:12.5px;font-weight:600;color:#5B3DF0">Step kinds</div><div class="serif" style="font-size:40px">6</div><div style="font-size:12.5px;color:#5F6678">browser, http, email, exec…</div></div>
+        <div class="h-card" style="padding:18px 20px"><div style="font-size:12.5px;font-weight:600;color:#8A5A12">Secrets stored for CI</div><div class="serif" style="font-size:40px">0</div><div style="font-size:12.5px;color:#5F6678">GitHub vouches (OIDC)</div></div>
+        <div class="h-card" style="padding:18px 20px"><div style="font-size:12.5px;font-weight:600;color:#5F6678">Runs kept</div><div class="serif" style="font-size:40px">{{RETENTION}}</div><div style="font-size:12.5px;color:#5F6678">days; flows and comments stay</div></div>
+        <div class="h-card" style="padding:18px 20px"><div style="font-size:12.5px;font-weight:600;color:#116632">HTML uploaded</div><div class="serif" style="font-size:40px">0</div><div style="font-size:12.5px;color:#5F6678">the site draws every page</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Self-host + final CTA ============ -->
+  <section id="self-host" class="cover" style="padding:88px 0">
+    <div class="h-wrap h-two">
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="kicker">Open source</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08;color:#fff">Rather keep flows on your own server? <em style="font-style:italic;font-weight:400;color:#B9ACFF">One command.</em></h2>
+        <p class="lede">enocone serve is everything this site runs: one binary, one data folder, Caddy in front for HTTPS.</p>
+        <pre class="h-term" style="background:rgba(255,255,255,.05);border:1px solid rgba(185,172,255,.25)"><span class="p">$</span> ENOCONE_PUBLIC_URL=https://flows.example.com \
+  ENOCONE_OWNER_EMAIL=you@example.com \
+  enocone serve</pre>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;align-items:flex-start">
+        <h3 class="serif" style="font-size:30px;color:#fff">Bring your team's flows here</h3>
+        <p class="lede" style="font-size:17px">Sign in, create a project, invite people by email, GitHub handle or team.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px">
+          {{GITHUB_CTA}}
+          <a href="#signin" class="h-btn" style="border:1px solid rgba(185,172,255,.5);color:#fff">Sign in with email</a>
+        </div>
+      </div>
+    </div>
+    <div class="h-wrap" style="margin-top:72px;padding-top:22px;border-top:1px solid rgba(185,172,255,.18);display:flex;flex-wrap:wrap;gap:20px;justify-content:space-between;font-size:13px;color:#9C97BD">
+      <span>{{SITE}} · enocone reads the same both ways</span>
+      <span style="display:flex;gap:18px;flex-wrap:wrap"><a href="https://github.com/driftwerk/enocone" style="color:#C9C4E6">GitHub</a><a href="https://github.com/driftwerk/enocone#readme" style="color:#C9C4E6">Docs</a><a href="https://github.com/driftwerk/enocone/blob/main/docs/self-host.md" style="color:#C9C4E6">Self-host guide</a></span>
+    </div>
+  </section>
+</div>
