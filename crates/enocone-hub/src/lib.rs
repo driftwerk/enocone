@@ -129,7 +129,7 @@ impl App {
     pub fn router(self) -> Router {
         Router::new()
             .route("/healthz", get(|| async { "ok" }))
-            .route("/assets/hub.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "public, max-age=3600")], include_str!("../assets/hub.css")) }))
+            .route("/assets/hub.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], pages::HUB_CSS) }))
             .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], pages::FAVICON) }))
             .route("/login", get(login_page))
             .route("/login/email", post(login_email))

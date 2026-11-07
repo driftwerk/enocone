@@ -22,15 +22,25 @@ pub fn doc(title: &str, body: &str) -> String {
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/assets/hub.css">
+<link rel="stylesheet" href="/assets/hub.css?v={}">
 </head>
 <body>
 {body}
 </body>
 </html>
 "#,
-        esc(title)
+        esc(title),
+        css_version()
     )
+}
+
+pub const HUB_CSS: &str = include_str!("../assets/hub.css");
+
+/// Part of the stylesheet's hash, in its URL, so browsers fetch it again when it changes.
+pub fn css_version() -> &'static str {
+    use sha2::{Digest, Sha256};
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| Sha256::digest(HUB_CSS.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect())
 }
 
 /// The mark and the "eno·c·one" wordmark, the same as in the run report.
