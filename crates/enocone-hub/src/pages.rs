@@ -33,12 +33,9 @@ pub fn doc(title: &str, body: &str) -> String {
     )
 }
 
+/// The mark and the "eno·c·one" wordmark, the same as in the run report.
 fn brand(site: &str) -> String {
-    let (a, b) = match site.split_once('.') {
-        Some((a, b)) => (a.to_string(), format!("<span class=\"dot\">.</span>{}", esc(b))),
-        None => (site.to_string(), String::new()),
-    };
-    format!(r#"<a class="brand" href="/">{MARK_ON_DARK}<span>{}{b}</span></a>"#, esc(&a))
+    format!(r#"<a class="brand" href="/" aria-label="{} home">{MARK_ON_DARK}<span class="wordmark">eno<em>c</em>one</span></a>"#, esc(site))
 }
 
 /// The sign-in page: a cover with the pitch, and the sign-in card.

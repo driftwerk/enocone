@@ -20,7 +20,9 @@ code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, 
 .lede { font-family: Fraunces, Georgia, serif; font-size: 18px; line-height: 1.5; color: var(--ink3); margin: 0; }
 .cover .lede { color: var(--lav2); }
 .brand { display: flex; align-items: center; gap: 10px; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 21px; color: #fff; text-decoration: none; }
-.brand .dot { color: var(--lav); }
+.brand .wordmark { letter-spacing: -0.015em; }
+.brand em { font-style: italic; font-weight: 400; color: #B9ACFF; }
+.brand[style*="--ink"] em { color: #5B3DF0; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 0 18px; border-radius: 10px; border: 1px solid var(--ink); background: var(--ink); color: #fff; font: 600 15px Inter, system-ui, sans-serif; text-decoration: none; cursor: pointer; }
 .btn.iris { background: var(--iris); border-color: var(--iris); }
 .btn.ghost { background: #fff; color: var(--ink); border-color: var(--field); }
