@@ -1,0 +1,77 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/playwright-rust
+            ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install browsers
+        run: cargo run --locked -p enocone-cli -- install-browsers chromium --with-deps
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # The demo suite through the action itself, against the fixture app.
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Start the fixture app
+        run: |
+          cargo build --locked -p enocone-fixture
+          ./target/debug/enocone-fixture 4010 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4010/login >/dev/null && break; sleep 1; done
+      - uses: ./
+        with:
+          project: examples/demo
+          report-name: demo-report
+
+  # enocone's own specification: the flows in e2e/ run the freshly built binary.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/playwright-rust
+            ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build enocone and the fixture app
+        run: cargo build --locked -p enocone-cli -p enocone-fixture
+      - name: Install browsers
+        run: ./target/debug/enocone install-browsers chromium --with-deps
+      - name: Start the fixture app
+        run: |
+          ./target/debug/enocone-fixture 4010 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4010/login >/dev/null && break; sleep 1; done
+      - name: Run the e2e flows
+        run: ./target/debug/enocone --project e2e run --single-file
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: e2e/enocone-report
+          if-no-files-found: ignore

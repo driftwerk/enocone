@@ -1,0 +1,8 @@
+project = "designed-vs-built-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"

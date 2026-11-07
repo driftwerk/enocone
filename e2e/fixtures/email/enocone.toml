@@ -1,0 +1,15 @@
+project = "email-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"
+API = "http://127.0.0.1:4010/api"
+
+# The demo app emulates a Postmark sandbox server's Messages API.
+[email]
+provider = "postmark"
+url = "{{env.WEB}}/postmark"
+token = "{{secret.POSTMARK_TOKEN | default: fixture-postmark-token}}"

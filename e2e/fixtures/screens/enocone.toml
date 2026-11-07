@@ -1,0 +1,3 @@
+project = "screens-fixture"
+[run]
+allow_exec = true

@@ -1,0 +1,8 @@
+target/
+enocone-report/
+.enocone/
+.DS_Store
+# The report crate shares its name with generated report folders.
+!crates/enocone-report/
+enocone-docs/
+.enocone.env

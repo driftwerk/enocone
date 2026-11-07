@@ -1,0 +1,92 @@
+name: enocone
+description: Run enocone business flows and publish the report
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  project:
+    description: Folder containing enocone.toml
+    default: .
+  env:
+    description: Environment from enocone.toml (default — the project's default_env)
+    default: ""
+  args:
+    description: Extra arguments for `enocone run` (e.g. `--tag smoke --retries 1`)
+    default: ""
+  report-name:
+    description: Name of the uploaded report artifact
+    default: enocone-report
+  browsers:
+    description: Browsers to install (space separated), or `none` for HTTP-only suites
+    default: chromium
+
+outputs:
+  exit-code:
+    description: 0 ok, 1 failures, 2 flow document errors, 3 could not run
+    value: ${{ steps.run.outputs.exit-code }}
+  report:
+    description: Path of the report folder
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    # The action builds enocone from its own checkout, so `uses: enocone/enocone@<ref>`
+    # pins the version. The cache key is a hash of that source (hashFiles can't
+    # see the action's folder when it is outside the workspace).
+    - name: Fingerprint enocone source
+      id: src
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}"
+        hash=$(find Cargo.toml Cargo.lock crates -type f -not -path '*/target/*' -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+        echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+    - name: Cache enocone and browsers
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/enocone-bin
+          ~/.cache/playwright-rust
+          ~/.cache/ms-playwright
+        key: enocone-${{ runner.os }}-${{ steps.src.outputs.hash }}
+
+    - name: Build enocone
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install --locked --path "${{ github.action_path }}/crates/enocone-cli" --root ~/.cache/enocone-bin
+
+    - name: Put enocone on PATH
+      shell: bash
+      run: |
+        echo "$HOME/.cache/enocone-bin/bin" >> "$GITHUB_PATH"
+        "$HOME/.cache/enocone-bin/bin/enocone" --version
+
+    - name: Install browsers
+      if: inputs.browsers != 'none'
+      shell: bash
+      run: enocone install-browsers ${{ inputs.browsers }} --with-deps
+
+    - name: Run flows
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.project }}
+      run: |
+        set +e
+        ENV_ARG=""
+        if [ -n "${{ inputs.env }}" ]; then ENV_ARG="--env ${{ inputs.env }}"; fi
+        enocone run $ENV_ARG --out enocone-report ${{ inputs.args }}
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=${{ inputs.project }}/enocone-report" >> "$GITHUB_OUTPUT"
+        exit $code
+
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.report-name }}
+        path: ${{ inputs.project }}/enocone-report
+        if-no-files-found: ignore

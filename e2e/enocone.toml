@@ -1,0 +1,21 @@
+# enocone's own end-to-end suite: enocone specified and tested with enocone.
+# Each flow runs the enocone binary under test against a small fixture project
+# (e2e/fixtures/…) and checks what it produced: results.json and the report.
+#
+#   cargo build -p enocone-cli -p enocone-fixture
+#   ./target/debug/enocone-fixture 4010 &
+#   ./target/debug/enocone --project e2e run
+project = "enocone"
+default_env = "local"
+
+[run]
+workers = 4
+timeout = "10s"
+allow_exec = true
+
+[env.local]
+# The binary under test (relative to this folder). Never a bare `enocone`.
+ENOCONE_BIN = "../target/debug/enocone"
+FIXTURES = "fixtures"
+WEB = "http://127.0.0.1:4010"
+API = "http://127.0.0.1:4010/api"

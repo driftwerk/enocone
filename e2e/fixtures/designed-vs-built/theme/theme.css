@@ -1,0 +1,4 @@
+body { background: #F4F5F8; color: var(--color-ink); }
+.card { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius-card); padding: 24px; margin: 24px; max-width: 420px; }
+.btn { display: inline-block; background: var(--color-primary); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 600; font-size: 15px; }
+.muted { color: var(--color-muted); }

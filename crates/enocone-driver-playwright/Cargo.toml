@@ -1,0 +1,15 @@
+[package]
+name = "enocone-driver-playwright"
+description = "Playwright browser driver for enocone (via playwright-rs and the official Playwright server)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+enocone-engine.workspace = true
+enocone-spec.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+playwright-rs.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

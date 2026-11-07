@@ -1,0 +1,3 @@
+project = "flowchart-fixture"
+[run]
+allow_exec = true

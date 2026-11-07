@@ -1,0 +1,17 @@
+project = "tokens-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+allow_exec = true
+
+[env.local]
+WEB = "http://127.0.0.1:4010"
+API = "http://127.0.0.1:4010/api"
+
+# The demo app's short-session endpoint issues tokens that last 2 seconds.
+[auth.short]
+type = "browser"
+login = "auth/sign-in"
+params = { username = "alice", password = "secret" }
+token = { url = "{{env.WEB}}/api/auth/short-session", path = "$.accessToken", refresh = "1s" }

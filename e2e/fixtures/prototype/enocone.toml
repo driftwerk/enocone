@@ -1,0 +1,9 @@
+project = "prototype-fixture"
+default_env = "local"
+
+[run]
+timeout = "3s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"
+API = "http://127.0.0.1:4010/api"

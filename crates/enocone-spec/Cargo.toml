@@ -1,0 +1,16 @@
+[package]
+name = "enocone-spec"
+description = "The enocone flow document format: parser, model, templating and run results"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulldown-cmark.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_json_path.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

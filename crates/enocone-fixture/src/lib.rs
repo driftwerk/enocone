@@ -1,0 +1,411 @@
+//! A tiny conveyancing-style app (leads, quotes, accept + pay links, login)
+//! that enocone's own tests and the demo flows run against.
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
+use axum::extract::{Form, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+pub const USER: &str = "alice";
+pub const PASSWORD: &str = "secret";
+pub const TOKEN: &str = "tok-alice-123456";
+pub const API_KEY: &str = "agency-key-98765";
+/// The emulated Postmark sandbox server's API token.
+pub const POSTMARK_TOKEN: &str = "fixture-postmark-token";
+
+#[derive(Default)]
+struct Db {
+    leads: HashMap<String, Value>,
+    quotes: HashMap<String, Value>,
+    /// Emails the app "sent". Readable through emulated Postmark and Mailpit APIs.
+    emails: Vec<Email>,
+    /// Short-lived access tokens: token → (serial, issued at).
+    short_tokens: HashMap<String, (u64, std::time::Instant)>,
+}
+
+/// How long a short-lived token lasts.
+pub const SHORT_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Clone)]
+struct Email {
+    id: String,
+    to: String,
+    from: String,
+    subject: String,
+    text: String,
+    html: String,
+    sent_at: String,
+}
+
+type S = Arc<Mutex<Db>>;
+
+fn id(prefix: &str) -> String {
+    format!("{prefix}_{}", &uuid::Uuid::new_v4().simple().to_string()[..6])
+}
+
+fn page(title: &str, body: &str) -> Html<String> {
+    Html(format!("<!doctype html><html lang=en><head><meta charset=utf-8><title>{title}</title></head><body><main>{body}</main></body></html>"))
+}
+
+fn authed(h: &HeaderMap) -> bool {
+    let bearer = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {TOKEN}"));
+    let key = h.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(API_KEY);
+    bearer || key
+}
+
+fn signed_in(h: &HeaderMap) -> bool {
+    h.get(header::COOKIE).and_then(|v| v.to_str().ok()).is_some_and(|c| c.contains(&format!("session={TOKEN}")))
+}
+
+fn unauthorised() -> Response {
+    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorised" }))).into_response()
+}
+
+fn money(pence: i64) -> String {
+    let pounds = pence / 100;
+    let s = pounds.to_string();
+    let mut with_commas = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            with_commas.push(',');
+        }
+        with_commas.push(c);
+    }
+    format!("£{with_commas}.{:02}", pence % 100)
+}
+
+pub fn app() -> Router {
+    let state: S = Arc::default();
+    Router::new()
+        .route("/", get(home))
+        .route("/login", get(login_page).post(login))
+        .route("/api/auth/session", get(session))
+        .route("/api/auth/short-session", get(short_session))
+        .route("/api/auth/short-session-once", get(short_session_once))
+        .route("/api/short/whoami", get(short_whoami))
+        .route("/api/leads", post(create_lead))
+        .route("/api/leads/{id}", get(get_lead))
+        .route("/api/leads/{id}/close", post(close_lead))
+        .route("/api/quotes", post(create_quote))
+        .route("/api/quotes/{id}/payment-status", get(payment_status))
+        .route("/public/quotes/{id}/accept/{token}", get(accept_page).post(accept))
+        .route("/public/quotes/{id}/pay", get(pay_page).post(pay))
+        .route("/pay-quote/{id}/payment-success", get(paid_page))
+        .route("/lead/{id}/milestones", get(milestones))
+        // Emulated sandbox mailboxes (read-only APIs, same shapes as the real ones).
+        .route("/postmark/messages/outbound", get(postmark_list))
+        .route("/postmark/messages/outbound/{id}/details", get(postmark_details))
+        .route("/mailpit/api/v1/search", get(mailpit_search))
+        .route("/mailpit/api/v1/message/{id}", get(mailpit_message))
+        .with_state(state)
+}
+
+/// Serve on `addr` (port 0 = any free port).
+pub async fn serve(addr: SocketAddr) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app()).await.unwrap();
+    });
+    (addr, handle)
+}
+
+async fn home(h: HeaderMap) -> Response {
+    if !signed_in(&h) {
+        return Redirect::to("/login").into_response();
+    }
+    page("Dashboard", "<h1>Dashboard</h1><p>Signed in as alice</p>").into_response()
+}
+
+async fn login_page() -> Html<String> {
+    page(
+        "Sign in",
+        r#"<h1>Sign in to your account</h1>
+<form method="post" action="/login">
+<label for="u">Username or email</label><input id="u" name="username">
+<label for="p">Password</label><input id="p" name="password" type="password">
+<button type="submit">Sign In</button></form>"#,
+    )
+}
+
+#[derive(Deserialize)]
+struct LoginForm {
+    username: String,
+    password: String,
+}
+
+async fn login(Form(f): Form<LoginForm>) -> Response {
+    if f.username == USER && f.password == PASSWORD {
+        ([(header::SET_COOKIE, format!("session={TOKEN}; Path=/; HttpOnly"))], Redirect::to("/")).into_response()
+    } else {
+        page("Sign in", "<h1>Sign in to your account</h1><p role=alert>Invalid username or password.</p>").into_response()
+    }
+}
+
+async fn session(h: HeaderMap) -> Json<Value> {
+    if signed_in(&h) { Json(json!({ "user": { "name": USER }, "accessToken": TOKEN })) } else { Json(json!({})) }
+}
+
+async fn create_lead(State(s): State<S>, h: HeaderMap, Json(body): Json<Value>) -> Response {
+    if !authed(&h) {
+        return unauthorised();
+    }
+    if body.get("property").is_none() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": "property is required" }))).into_response();
+    }
+    let lead_id = id("ld");
+    let mut lead = body.clone();
+    lead["id"] = json!(lead_id);
+    lead["status"] = json!("open");
+    lead["milestones"] = json!({ "quote_accepted": false });
+    s.lock().unwrap().leads.insert(lead_id.clone(), lead.clone());
+    (StatusCode::CREATED, Json(lead)).into_response()
+}
+
+async fn get_lead(State(s): State<S>, h: HeaderMap, Path(lead): Path<String>) -> Response {
+    if !authed(&h) {
+        return unauthorised();
+    }
+    match s.lock().unwrap().leads.get(&lead) {
+        Some(l) => Json(l.clone()).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response(),
+    }
+}
+
+async fn close_lead(State(s): State<S>, h: HeaderMap, Path(lead): Path<String>) -> Response {
+    if !authed(&h) {
+        return unauthorised();
+    }
+    match s.lock().unwrap().leads.get_mut(&lead) {
+        Some(l) => {
+            l["status"] = json!("closed");
+            Json(l.clone()).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn create_quote(State(s): State<S>, h: HeaderMap, Json(body): Json<Value>) -> Response {
+    if !authed(&h) {
+        return unauthorised();
+    }
+    let total: i64 = body["fees"]
+        .as_array()
+        .map(|fees| {
+            fees.iter()
+                .map(|f| {
+                    let a = f["amount"].as_i64().unwrap_or(0);
+                    if f["vat"].as_bool().unwrap_or(false) { a * 6 / 5 } else { a }
+                })
+                .sum()
+        })
+        .unwrap_or(0);
+    let qid = id("q");
+    let token = id("tk");
+    let quote = json!({ "id": qid, "lead_id": body["lead_id"], "total": total, "status": "draft", "accept_token": token, "paid": false });
+    let mut db = s.lock().unwrap();
+    if let Some(to) = body["client_email"].as_str() {
+        // Links point back at whichever address the API was called on.
+        let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("127.0.0.1:4010");
+        let link = format!("http://{host}/public/quotes/{qid}/accept/{token}");
+        db.emails.push(Email {
+            id: uuid::Uuid::new_v4().to_string(),
+            to: to.to_string(),
+            from: "quotes@example.test".into(),
+            subject: format!("Your conveyancing quote: {}", money(total)),
+            text: format!("Hello,\n\nYour quote comes to {}.\nAccept it here: {link}\n", money(total)),
+            html: format!(
+                r#"<p>Hello,</p><p>Your quote comes to <strong>{}</strong>.</p><p><a href="{link}">Review and accept your quote</a></p><p><a href="http://{host}/help">Questions?</a></p>"#,
+                money(total)
+            ),
+            sent_at: now_rfc3339(),
+        });
+    }
+    db.quotes.insert(qid, quote.clone());
+    drop(db);
+    (StatusCode::CREATED, Json(quote)).into_response()
+}
+
+async fn payment_status(State(s): State<S>, h: HeaderMap, Path(q): Path<String>) -> Response {
+    if !authed(&h) {
+        return unauthorised();
+    }
+    match s.lock().unwrap().quotes.get(&q) {
+        Some(q) => Json(json!({ "status": if q["paid"].as_bool() == Some(true) { "paid" } else { "pending" } })).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn accept_page(State(s): State<S>, Path((q, token)): Path<(String, String)>) -> Response {
+    let db = s.lock().unwrap();
+    let Some(quote) = db.quotes.get(&q).filter(|q| q["accept_token"] == json!(token)) else {
+        return (StatusCode::NOT_FOUND, page("Not found", "<h1>This link has expired</h1>")).into_response();
+    };
+    page(
+        "Your quote",
+        &format!(
+            r#"<h1>Your conveyancing quote</h1><p>Total: {}</p>
+<form method="post"><label><input type="checkbox" name="terms" value="yes"> I accept the terms of engagement</label>
+<button type="submit">Accept quote</button></form>"#,
+            money(quote["total"].as_i64().unwrap_or(0))
+        ),
+    )
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct AcceptForm {
+    terms: Option<String>,
+}
+
+async fn accept(State(s): State<S>, Path((q, _token)): Path<(String, String)>, Form(f): Form<AcceptForm>) -> Response {
+    if f.terms.is_none() {
+        return page("Your quote", "<h1>Your conveyancing quote</h1><p role=alert>Please accept the terms to continue.</p>").into_response();
+    }
+    let mut db = s.lock().unwrap();
+    if let Some(quote) = db.quotes.get_mut(&q) {
+        quote["status"] = json!("accepted");
+        let lead = quote["lead_id"].as_str().unwrap_or("").to_string();
+        if let Some(l) = db.leads.get_mut(&lead) {
+            l["milestones"]["quote_accepted"] = json!(true);
+        }
+    }
+    Redirect::to(&format!("/public/quotes/{q}/pay")).into_response()
+}
+
+async fn pay_page(State(s): State<S>, Path(q): Path<String>) -> Response {
+    let total = s.lock().unwrap().quotes.get(&q).and_then(|q| q["total"].as_i64()).unwrap_or(0);
+    page("Pay", &format!(r#"<h1>Pay for your quote</h1><form method="post"><label for="c">Card number</label><input id="c" name="card"><button type="submit">Pay {}</button></form>"#, money(total)))
+        .into_response()
+}
+
+async fn pay(State(s): State<S>, Path(q): Path<String>) -> Response {
+    if let Some(quote) = s.lock().unwrap().quotes.get_mut(&q) {
+        quote["paid"] = json!(true);
+    }
+    Redirect::to(&format!("/pay-quote/{q}/payment-success")).into_response()
+}
+
+async fn paid_page(State(s): State<S>, Path(q): Path<String>) -> Response {
+    let total = s.lock().unwrap().quotes.get(&q).and_then(|q| q["total"].as_i64()).unwrap_or(0);
+    page("Paid", &format!(r#"<section aria-label="Payment confirmed"><h1>Payment confirmed</h1><p>We have received {}.</p></section>"#, money(total))).into_response()
+}
+
+async fn milestones(State(s): State<S>, h: HeaderMap, Path(lead): Path<String>) -> Response {
+    if !signed_in(&h) {
+        return Redirect::to("/login").into_response();
+    }
+    let accepted = s.lock().unwrap().leads.get(&lead).map(|l| l["milestones"]["quote_accepted"] == json!(true)).unwrap_or(false);
+    page("Milestones", &format!(r#"<h1>Milestones</h1><label><input type="checkbox" disabled {}> Quote accepted</label>"#, if accepted { "checked" } else { "" })).into_response()
+}
+
+// ---------------------------------------------------------------- emulated mailboxes
+
+fn now_rfc3339() -> String {
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = d.as_secs() as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem % 3600 / 60, rem % 60, d.subsec_millis())
+}
+
+fn emails_to(db: &Db, to: &str) -> Vec<Email> {
+    let mut v: Vec<Email> = db.emails.iter().filter(|e| to.is_empty() || e.to.eq_ignore_ascii_case(to)).cloned().collect();
+    v.reverse(); // newest first, as the real APIs list them
+    v
+}
+
+fn postmark_ok(h: &HeaderMap) -> bool {
+    h.get("x-postmark-server-token").and_then(|v| v.to_str().ok()) == Some(POSTMARK_TOKEN)
+}
+
+async fn postmark_list(State(s): State<S>, h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Response {
+    if !postmark_ok(&h) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "ErrorCode": 10, "Message": "No Account or Server API tokens were supplied in the HTTP headers." }))).into_response();
+    }
+    let list = emails_to(&s.lock().unwrap(), q.get("recipient").map(String::as_str).unwrap_or(""));
+    let messages: Vec<Value> = list
+        .iter()
+        .map(|e| json!({ "MessageID": e.id, "MessageStream": "outbound", "To": [{ "Email": e.to, "Name": null }], "Recipients": [e.to], "ReceivedAt": e.sent_at, "From": e.from, "Subject": e.subject, "Status": "Sent", "Sandboxed": true }))
+        .collect();
+    Json(json!({ "TotalCount": messages.len(), "Messages": messages })).into_response()
+}
+
+async fn postmark_details(State(s): State<S>, h: HeaderMap, Path(id): Path<String>) -> Response {
+    if !postmark_ok(&h) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match s.lock().unwrap().emails.iter().find(|e| e.id == id) {
+        Some(e) => {
+            Json(json!({ "MessageID": e.id, "To": [{ "Email": e.to }], "From": e.from, "Subject": e.subject, "TextBody": e.text, "HtmlBody": e.html, "ReceivedAt": e.sent_at, "Status": "Sent" }))
+                .into_response()
+        }
+        None => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "ErrorCode": 701, "Message": "This message was not found." }))).into_response(),
+    }
+}
+
+async fn mailpit_search(State(s): State<S>, Query(q): Query<HashMap<String, String>>) -> Response {
+    // Only `to:"address"` (or a bare address) is understood.
+    let query = q.get("query").cloned().unwrap_or_default();
+    let to = query.trim().trim_start_matches("to:").trim_matches('"').to_string();
+    let list = emails_to(&s.lock().unwrap(), &to);
+    let messages: Vec<Value> = list
+        .iter()
+        .map(|e| json!({ "ID": e.id, "From": { "Address": e.from, "Name": "" }, "To": [{ "Address": e.to, "Name": "" }], "Subject": e.subject, "Created": e.sent_at, "Snippet": e.text.chars().take(80).collect::<String>() }))
+        .collect();
+    Json(json!({ "total": messages.len(), "messages_count": messages.len(), "messages": messages })).into_response()
+}
+
+async fn mailpit_message(State(s): State<S>, Path(id): Path<String>) -> Response {
+    match s.lock().unwrap().emails.iter().find(|e| e.id == id) {
+        Some(e) => Json(json!({ "ID": e.id, "From": { "Address": e.from }, "To": [{ "Address": e.to }], "Subject": e.subject, "Date": e.sent_at, "Text": e.text, "HTML": e.html })).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+// ---------------------------------------------------------------- short-lived tokens
+
+/// Like `/api/auth/session`, but every call issues a new token that lasts 2 seconds.
+async fn short_session(State(s): State<S>, h: HeaderMap) -> Json<Value> {
+    if !signed_in(&h) {
+        return Json(json!({}));
+    }
+    let mut db = s.lock().unwrap();
+    let serial = db.short_tokens.len() as u64 + 1;
+    let token = format!("st-{}", uuid::Uuid::new_v4().simple());
+    db.short_tokens.insert(token.clone(), (serial, std::time::Instant::now()));
+    Json(json!({ "user": { "name": USER }, "accessToken": token, "expiresIn": SHORT_TOKEN_TTL.as_secs() }))
+}
+
+/// Issues one short-lived token, then behaves as if the sign-in session had
+/// expired (no token), so tests can see what a failed refresh looks like.
+async fn short_session_once(State(s): State<S>, h: HeaderMap) -> Json<Value> {
+    let first = s.lock().unwrap().short_tokens.is_empty();
+    if first { short_session(State(s), h).await } else { Json(json!({ "user": null })) }
+}
+
+/// Which token was used (its serial number), if it is still fresh.
+async fn short_whoami(State(s): State<S>, h: HeaderMap) -> Response {
+    let token = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+    match s.lock().unwrap().short_tokens.get(token) {
+        Some((serial, at)) if at.elapsed() <= SHORT_TOKEN_TTL => Json(json!({ "user": USER, "token_serial": serial })).into_response(),
+        Some(_) => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "token expired" }))).into_response(),
+        None => unauthorised(),
+    }
+}

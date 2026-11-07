@@ -1,0 +1,22 @@
+# Demo project: runs against the fixture app (`cargo run -p enocone-fixture`).
+project = "demo-conveyancing"
+default_env = "local"
+
+[run]
+workers = 2
+timeout = "5s"
+
+[env.local]
+API = "http://127.0.0.1:4010/api"
+WEB = "http://127.0.0.1:4010"
+
+[auth.case-handler]
+type = "browser"
+login = "auth/sign-in"
+params = { username = "{{secret.DEMO_USER | default: alice}}", password = "{{secret.DEMO_PASSWORD | default: secret}}" }
+token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken" }
+
+[auth.agency-api-key]
+type = "header"
+header = "X-API-Key"
+value = "{{secret.DEMO_AGENCY_KEY | default: agency-key-98765}}"
