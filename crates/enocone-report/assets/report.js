@@ -127,16 +127,23 @@
       r.dataset.theme = dark ? "light" : "dark"; try { localStorage.setItem("enocone-theme", r.dataset.theme); } catch (_) {}
     } }, "Theme");
     return h("header", { class: "top" }, h("div", { class: "in" },
-      h("a", { class: "brand", href: "#" }, logo(), h("span", { class: "display" }, "enocone")),
+      h("a", { class: "brand", href: "#", "aria-label": "enocone" }, logo(), wordmark()),
       h("nav", { class: "meta", "aria-label": "Run" }, meta),
       h("div", { class: "top-actions" }, extra, run.ci_url ? h("a", { href: run.ci_url, target: "_blank", rel: "noopener" }, "CI run") : null, toggle)));
   }
+  // The mark: two cones meeting at a ring, the "c" in the middle of e·n·o·c·o·n·e.
   function logo() {
     const ns = "http://www.w3.org/2000/svg", s = document.createElementNS(ns, "svg");
-    s.setAttribute("width", "24"); s.setAttribute("height", "24"); s.setAttribute("viewBox", "0 0 26 26"); s.setAttribute("aria-hidden", "true");
-    const c1 = document.createElementNS(ns, "circle"); c1.setAttribute("cx", 13); c1.setAttribute("cy", 13); c1.setAttribute("r", 11); c1.setAttribute("fill", "none"); c1.setAttribute("stroke", "#8EA2FF"); c1.setAttribute("stroke-width", "2.5");
-    const c2 = document.createElementNS(ns, "circle"); c2.setAttribute("cx", 13); c2.setAttribute("cy", 13); c2.setAttribute("r", 4); c2.setAttribute("fill", "#8EA2FF");
-    s.append(c1, c2); return s;
+    s.setAttribute("width", "28"); s.setAttribute("height", "28"); s.setAttribute("viewBox", "0 0 48 48"); s.setAttribute("aria-hidden", "true");
+    const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+    s.append(
+      el("path", { d: "M5 10 L21 24 L5 38 Z", fill: "#8F7BFF" }), el("ellipse", { cx: 5, cy: 24, rx: 3, ry: 14, fill: "#B9ACFF" }),
+      el("path", { d: "M43 10 L27 24 L43 38 Z", fill: "#8F7BFF" }), el("ellipse", { cx: 43, cy: 24, rx: 3, ry: 14, fill: "#B9ACFF" }),
+      el("circle", { cx: 24, cy: 24, r: 4.2, fill: "none", stroke: "#FFFFFF", "stroke-width": 2 }));
+    return s;
+  }
+  function wordmark() {
+    return h("span", { class: "display wordmark" }, "eno", h("em", null, "c"), "one");
   }
 
   // ---------------------------------------------------------------- index

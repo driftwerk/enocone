@@ -291,3 +291,7 @@ figure.chart, figure.storyboard { background: var(--surface); border-color: var(
 }
 footer.foot { font-family: Fraunces, Georgia, serif; font-size: 13px; }
 .dvb .mockfig { min-width: 0; max-width: none; }
+
+/* The wordmark: Fraunces, with the middle "c" in lavender italic. */
+header.top .brand .wordmark { font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 21px; letter-spacing: -0.015em; }
+header.top .brand .wordmark em { font-style: italic; font-weight: 400; color: #B9ACFF; }
