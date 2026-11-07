@@ -74,7 +74,7 @@ flowchart LR
      cp -R "{{env.FIXTURES}}/prototype" "{{run.tmp}}/p"
      printf '\n[hub]\nurl = "http://127.0.0.1:18184"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --prototype >/dev/null 2>&1
-     ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/credentials" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
+     env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ENOCONE_HUB_TOKEN ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/credentials" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
    expect:
      stdout: { matches: "^http://127.0.0.1:18184/shop/runs/\\d+/\\n$" }
      stderr: "published 1 flows"
