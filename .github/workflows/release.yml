@@ -16,7 +16,7 @@ jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: The tag matches the crate version
         run: |
           crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -40,7 +40,7 @@ jobs:
       # Where the build assembles the Playwright driver, so it can be packed.
       PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/.pw-driver
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # No build cache here: a restored build skips assembling the driver.
       - name: Build
@@ -60,7 +60,7 @@ jobs:
           tar -czf "$name" -C pkg enocone playwright-driver
           if command -v sha256sum >/dev/null; then sha256sum "$name"; else shasum -a 256 "$name"; fi | cut -d' ' -f1 > "$name.sha256"
           cat "$name.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: enocone-${{ matrix.target }}
           path: enocone-${{ matrix.target }}.tar.gz*
@@ -69,8 +69,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
