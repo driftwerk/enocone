@@ -3,7 +3,7 @@ area: Getting started
 tags: [install, brew, release]
 owner: enocone
 priority: high
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -48,17 +48,73 @@ flowchart LR
 ## Given
 
 1. **A new version of enocone is tagged**
+   ```exec
+   run: |
+     crate=$(sed -n 's/^version = "\(.*\)"/\1/p' ../Cargo.toml | head -1)
+     [ "$("{{env.ENOCONE_BIN}}" --version)" = "enocone $crate" ] && echo "enocone --version matches Cargo.toml ($crate)"
+     grep -q "doesn't match the version in Cargo.toml" ../.github/workflows/release.yml && echo "the release refuses a tag that doesn't match"
+   expect:
+     stdout: { matches: "(?s)--version matches Cargo.toml.*refuses a tag that doesn't match" }
+   ```
 
 ## When
 
 2. **The release builds an archive for each platform, each with the driver beside the binary**
+   ```exec
+   run: |
+     # What the release's Package step does, with the binary under test.
+     cli=$(env -u PLAYWRIGHT_DRIVER_PATH "{{env.ENOCONE_BIN}}" doctor | sed -n 3p | tr -d ' ')
+     mkdir -p "{{run.tmp}}/pkg" "{{run.tmp}}/dist"
+     cp "{{env.ENOCONE_BIN}}" "{{run.tmp}}/pkg/"
+     cp -R "$(dirname "$(dirname "$cli")")" "{{run.tmp}}/pkg/playwright-driver"
+     tar -cf "{{run.tmp}}/dist/enocone.tar" -C "{{run.tmp}}/pkg" enocone playwright-driver
+     tar -tf "{{run.tmp}}/dist/enocone.tar" | grep -E '^(enocone|playwright-driver/node|playwright-driver/package/cli\.js)$' | sort
+   expect:
+     stdout: "enocone\nplaywright-driver/node\nplaywright-driver/package/cli.js\n"
+   ```
 
 3. **The tap's formula is updated to the new version and checksums**
+   ```exec
+   run: |
+     tar="{{run.tmp}}/dist/enocone.tar"
+     sha=$( (sha256sum "$tar" 2>/dev/null || shasum -a 256 "$tar") | cut -c1-64)
+     for t in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do echo "$sha" > "{{run.tmp}}/dist/enocone-$t.tar.gz.sha256"; done
+     sh ../.github/scripts/homebrew-formula.sh 9.8.7 "{{run.tmp}}/dist" | tee "{{run.tmp}}/enocone.rb"
+     [ "$(grep -c "sha256 \"$sha\"" "{{run.tmp}}/enocone.rb")" = 3 ] && echo "each platform has the archive's checksum"
+   expect:
+     stdout: { matches: "(?s)version \"9\\.8\\.7\".*releases/download/v9\\.8\\.7/enocone-aarch64-apple-darwin\\.tar\\.gz.*libexec\\.install \"enocone\", \"playwright-driver\".*bin\\.install_symlink.*bundled with enocone.*each platform has the archive's checksum" }
+   ```
 
 4. **Ana installs enocone with Homebrew on her Mac**
+   ```exec
+   run: |
+     # The formula's install: both into libexec, and a symlink in bin.
+     mkdir -p "{{run.tmp}}/brew/libexec" "{{run.tmp}}/brew/bin"
+     tar -xf "{{run.tmp}}/dist/enocone.tar" -C "{{run.tmp}}/brew/libexec"
+     ln -s ../libexec/enocone "{{run.tmp}}/brew/bin/enocone"
+     ls "{{run.tmp}}/brew/libexec"
+   expect: { stdout: "enocone\nplaywright-driver\n" }
+   ```
 
 ## Then
 
 5. **enocone doctor shows the bundled driver, and --version shows the new version**
+   ```exec
+   run: |
+     env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" --version
+     env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" doctor
+   expect:
+     stdout: { matches: "(?s)^enocone \\S+\\n.*playwright driver: bundled with enocone\\n\\s+\\S*/brew/libexec/playwright-driver/package/cli\\.js" }
+   ```
 
 6. **After enocone install-browsers, a flow with browser steps passes**
+   ```exec
+   run: |
+     cp -R "{{env.FIXTURES}}/designed-vs-built" "{{run.tmp}}/p"
+     env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1
+     cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       $.flows[0].attempts[0].steps[0].status: passed
+       $.flows[0].attempts[0].steps[0].screenshot: { exists: true }
+   ```

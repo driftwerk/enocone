@@ -3,7 +3,7 @@ area: Getting started
 tags: [init, mcp, hub, ci]
 owner: enocone
 priority: high
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -48,15 +48,65 @@ flowchart LR
 ## Given
 
 1. **Ana has a repository acme/shop with no enocone files**
+   ```exec
+   run: |
+     mkdir -p "{{run.tmp}}/shop" && cd "{{run.tmp}}/shop"
+     git init -q . && git remote add origin https://github.com/acme/shop.git
+     ls -A | grep -v '^\.git$' | wc -l | tr -d ' '
+   expect: { stdout: { matches: "^0\\s*$" } }
+   ```
 
 ## When
 
 2. **She runs enocone init --name shop --hub https://enoc.one**
+   ```exec
+   run: |
+     bin=$(realpath "{{env.ENOCONE_BIN}}") && cd "{{run.tmp}}/shop"
+     "$bin" init --name shop --hub https://enoc.one 2>&1 | tee "{{run.tmp}}/first.txt"
+   expect:
+     stdout: { matches: "(?s)created  enocone.toml.*created  \\.mcp\\.json.*created  \\.github/workflows/enocone\\.yml" }
+   ```
 
 ## Then
 
 3. **The project has enocone.toml with a [hub] section, .mcp.json and a CI workflow that publishes**
+   ```exec
+   run: |
+     cd "{{run.tmp}}/shop"
+     sed -n '/^\[hub\]/,$p' enocone.toml
+   expect:
+     stdout: { matches: "(?s)\\[hub\\]\\s*url = \"https://enoc\\.one\"\\s*project = \"shop\"" }
+   ```
+   ```exec
+   run: |
+     cat "{{run.tmp}}/shop/.mcp.json"
+   expect:
+     json:
+       $.mcpServers.enocone.args[0]: mcp
+   ```
+   ```exec
+   run: |
+     cat "{{run.tmp}}/shop/.github/workflows/enocone.yml"
+   expect:
+     stdout: { matches: "(?s)id-token: write.*uses: driftwerk/enocone@v0.*publish: true" }
+   ```
 
 4. **The printout lists the steps left: sign in, create shop on the site linked to acme/shop, open the AI tool**
+   ```exec
+   run: |
+     sed -n '/^Next:/,$p' "{{run.tmp}}/first.txt"
+   expect:
+     stdout: { matches: "(?s)enocone login.*create the project `shop` and link it to the GitHub repository acme/shop.*\\.mcp\\.json starts enocone's MCP server.*claude mcp add enocone --scope user -- enocone mcp" }
+   ```
 
 5. **Running init again changes nothing and says which files were already there**
+   ```exec
+   run: |
+     bin=$(realpath "{{env.ENOCONE_BIN}}") && cd "{{run.tmp}}/shop"
+     before=$(find . -path ./.git -prune -o -type f -print | sort | xargs cat | cksum)
+     "$bin" init --name shop --hub https://enoc.one 2>&1 | sed -n '1,/^$/p'
+     after=$(find . -path ./.git -prune -o -type f -print | sort | xargs cat | cksum)
+     [ "$before" = "$after" ] && echo "files unchanged"
+   expect:
+     stdout: { matches: "(?s)kept     enocone\\.toml \\(already exists\\).*kept     \\.github/workflows/enocone\\.yml \\(already exists\\).*files unchanged", not: { contains: "created" } }
+   ```

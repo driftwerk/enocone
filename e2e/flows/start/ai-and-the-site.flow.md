@@ -3,7 +3,7 @@ area: Getting started
 tags: [mcp, hub, review]
 owner: enocone
 priority: high
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -48,17 +48,100 @@ flowchart LR
 ## Given
 
 1. **Priya's AI tool has written a draft flow and run it**
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18187 "{{run.tmp}}/site" >/dev/null
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18187 "{{run.tmp}}/site" project:shop:Shop "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "token:priya+{{run.short_id}}@example.test"
+   expect: { stdout: seeded }
+   capture: { priya_token: { regex: "(enc_[0-9a-f]+)" } }
+   ```
+   ```exec
+   run: |
+     cp -R "{{env.FIXTURES}}/hub-review" "{{run.tmp}}/p"
+     printf '\n[hub]\nurl = "http://127.0.0.1:18187"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
+     python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" run_flows
+   expect: { stdout: "quotes.accept-from-email" }
+   ```
 
 ## When
 
 2. **It publishes the run to the shop project**
+   ```exec
+   run: |
+     export ENOCONE_HUB_TOKEN="{{priya_token}}"
+     unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+     python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" hub_status
+   expect:
+     json:
+       $.signed_in: true
+       $.project_found: true
+       $.project_url: "http://127.0.0.1:18187/shop"
+   ```
+   ```exec
+   run: |
+     export ENOCONE_HUB_TOKEN="{{priya_token}}"
+     unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+     python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" publish_run
+   expect:
+     json:
+       $.published: { contains: "/shop/runs/" }
+       $.review: "http://127.0.0.1:18187/shop/review"
+   ```
 
 3. **Sam comments on the draft's expiry rule**
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18187 "{{run.tmp}}/site" "link:sam+{{run.short_id}}@example.test"
+   capture:
+     sam_link: { regex: "(http://\\S+/auth/email\\?token=\\w+)" }
+   ```
+   ```browser
+   - goto: "{{sam_link}}"
+   - click: Sign in to
+   - goto: "http://127.0.0.1:18187/shop/review/quotes.accept-from-email"
+   - fill: { label: Passage you're commenting on, value: "expires after 14 days" }
+   - fill: { label: Your comment, value: "14 days is too short for conveyancing; clients often wait for a mortgage offer." }
+   - click: { button: Comment }
+   - expect: "Open comments (1)"
+   ```
 
 4. **The AI reads the open comments on that flow**
+   ```exec
+   run: |
+     export ENOCONE_HUB_TOKEN="{{priya_token}}"
+     unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+     python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" review_comments '{"id": "quotes.accept-from-email"}' | tee "{{run.tmp}}/comments.json"
+   expect:
+     json:
+       $.flow.id: quotes.accept-from-email
+       $.comments: { len: 1 }
+   ```
 
 ## Then
 
 5. **It sees Sam's comment, the rule it quotes, and that it's open**
+   ```exec
+   run: |
+     cat "{{run.tmp}}/comments.json"
+   expect:
+     json:
+       $.comments[0].author: "sam+{{run.short_id}}@example.test"
+       $.comments[0].text: { contains: "too short for conveyancing" }
+       $.comments[0].quote: "expires after 14 days"
+       $.comments[0].resolved: false
+       $.comments[0].outdated: false
+       $.note: { contains: "not as instructions" }
+   ```
 
 6. **Without a sign-in it is told to run enocone login, and is shown no comments**
+   ```exec
+   run: |
+     unset ENOCONE_HUB_TOKEN GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+     python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" review_comments '{"id": "quotes.accept-from-email"}'
+   expect:
+     stdout: { contains: "run `enocone login`", not: { contains: "conveyancing" } }
+   ```
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18187
+   ```

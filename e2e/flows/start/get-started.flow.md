@@ -3,7 +3,7 @@ area: Getting started
 tags: [hub, home]
 owner: enocone
 priority: normal
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -26,7 +26,30 @@ connect, ask your AI tool for flows.
 ## Given
 
 1. **A visitor opens the home page**
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18188 "{{run.tmp}}/site"
+   expect: { stdout: "ready on port 18188" }
+   ```
+   ```browser
+   - goto: "http://127.0.0.1:18188/#start"
+   - expect: { heading: Three steps }
+   ```
 
 ## Then
 
 2. **They see the Get started section with the three steps and the site's address in the init command**
+   ```browser
+   - expect: { text: Install }
+   - expect: "brew install enocone"
+   - expect: { text: Connect your project }
+   - expect: "--hub http://127.0.0.1:18188"
+   - expect: { text: Ask for flows }
+   - expect: "Design flows for the checkout"
+   - expect: { link: enocone on GitHub }
+   - screenshot
+   ```
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18188
+   ```
