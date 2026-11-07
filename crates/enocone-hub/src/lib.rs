@@ -187,6 +187,9 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    if !h.contains_key("strict-transport-security") {
+        h.insert("strict-transport-security", HeaderValue::from_static("max-age=31536000"));
+    }
     if !h.contains_key("content-security-policy") {
         h.insert(
             "content-security-policy",

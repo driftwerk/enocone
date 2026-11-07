@@ -3,7 +3,7 @@ area: Hosted site
 tags: [hub, serve]
 owner: enocone
 priority: normal
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -24,8 +24,8 @@ flowchart LR
 - One binary, one data folder: SQLite for people, projects and comments; files
   for runs and screenshots. Backing up the folder backs up everything.
 - Configuration comes from flags or environment variables: the public URL,
-  GitHub OAuth app id and secret (optional), and an email provider for
-  sign-in links (Postmark or SMTP).
+  GitHub OAuth app id and secret (optional), and Postmark for sign-in
+  emails (optional: without it, links are written to the log).
 - With no GitHub app configured, sign-in is by email link only.
 - The first person to sign in with the address in `--owner-email` becomes the
   site's owner; nobody else can sign in until invited.
@@ -43,7 +43,7 @@ flowchart LR
 
 ## When
 
-2. **enocone serve starts on port 8080**
+2. **enocone serve starts on a local port**
    ```exec
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18181 "{{run.tmp}}/site" && curl -fsS http://127.0.0.1:18181/healthz

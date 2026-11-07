@@ -3,7 +3,7 @@ area: Hosted site
 tags: [hub, publish, ci]
 owner: enocone
 priority: high
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 

@@ -3,7 +3,7 @@ area: Hosted site
 tags: [hub, members]
 owner: enocone
 priority: normal
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
@@ -78,6 +78,8 @@ flowchart LR
 3. **Sam can read and comment on shop but not publish to it**
    ```exec
    run: |
+     cp -R "{{env.FIXTURES}}/hub-review" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run >/dev/null 2>&1
+     env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN ENOCONE_HUB_TOKEN="{{priya_token}}" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish --url http://127.0.0.1:18183 --to shop >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18183 "{{run.tmp}}/site" "token:sam+{{run.short_id}}@example.test" "link:sam+{{run.short_id}}@example.test"
    capture:
      sam_token: { regex: "(enc_[0-9a-f]+)" }
@@ -97,9 +99,11 @@ flowchart LR
    - click: Sign out
    - goto: "{{sam_link}}"
    - click: Sign in to
-   - goto: "http://127.0.0.1:18183/shop"
-   - expect: { heading: Shop }
-   - expect: { link: Review }
+   - goto: "http://127.0.0.1:18183/shop/review/quotes.accept-from-email"
+   - fill: { label: Your comment, value: "Looks right to me." }
+   - click: { button: Comment }
+   - expect: "Open comments (1)"
+   - expect: { button: Resolve, hidden: true }
    ```
 
 4. **Someone who isn't a member gets “not found” for /shop**
