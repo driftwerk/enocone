@@ -409,22 +409,26 @@ async fn real_main(cli: Cli) -> anyhow::Result<i32> {
             Ok(0)
         }
         Cmd::Doctor => {
-            println!("enocone {}", env!("CARGO_PKG_VERSION"));
+            use std::fmt::Write as _;
+            let mut out = format!("enocone {}\n", env!("CARGO_PKG_VERSION"));
             let (source, path) = enocone_driver_playwright::driver_info();
             let ok = match &path {
                 Ok(p) => {
-                    println!("playwright driver: {source}\n  {}", p.display());
+                    let _ = writeln!(out, "playwright driver: {source}\n  {}", p.display());
                     true
                 }
                 Err(e) => {
-                    println!("playwright driver: not found ({source})\n  {e}");
+                    let _ = writeln!(out, "playwright driver: not found ({source})\n  {e}");
                     false
                 }
             };
             match load_project(&cli) {
-                Ok(p) => println!("project: {} ({})", p.config.project, p.root.display()),
-                Err(_) => println!("project: none here (enocone init creates one)"),
+                Ok(p) => _ = writeln!(out, "project: {} ({})", p.config.project, p.root.display()),
+                Err(_) => out.push_str("project: none here (enocone init creates one)\n"),
             }
+            // One write, and a closed pipe (`enocone doctor | head -1`) isn't an error.
+            use std::io::Write as _;
+            let _ = std::io::stdout().lock().write_all(out.as_bytes());
             Ok(if ok { 0 } else { 1 })
         }
         Cmd::InstallBrowsers { browsers, with_deps } => {
