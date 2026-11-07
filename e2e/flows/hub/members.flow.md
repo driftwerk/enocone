@@ -8,7 +8,7 @@ stage: draft
 
 # Project owners invite the team, and everything is private by default
 
-A team's flows describe unreleased features, so nothing on enocone.xyz is
+A team's flows describe unreleased features, so nothing on enoc.one is
 public. An owner invites people by GitHub handle or email and gives each a
 role.
 
@@ -24,6 +24,8 @@ flowchart LR
   comment, resolve, approve), **reviewer** (read, comment, approve).
 - Every page and API call checks membership. Someone who is not a member gets
   a 404, not a 403, so project names don't leak.
+- A project can also be granted to a GitHub organisation or team, with one
+  role for all its members.
 - A project has at least one owner.
 - Removing someone revokes their sessions and their publish tokens for that
   project straight away.

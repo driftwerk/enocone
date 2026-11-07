@@ -35,7 +35,7 @@ h1 { font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 34px; l
 .term { background: var(--head); color: #D9DCF0; border-radius: 8px; padding: 14px 16px; font: 12.5px/1.6 "JetBrains Mono", ui-monospace, monospace; white-space: pre; }
 .term .ok { color: #5CC98B; } .term .bad { color: #FF8A7A; } .term .dim { color: #8B94A5; }
 
-/* hosted site (enocone.xyz) */
+/* hosted site (enoc.one) */
 .hub { display: grid; grid-template-columns: 220px 1fr; min-height: 640px; }
 .hub nav { background: #F3F1EC; border-right: 1px solid var(--rule); padding: 20px 16px; font-size: 13.5px; }
 .hub nav .p { padding: 7px 10px; border-radius: 6px; color: var(--ink3); } .hub nav .p.on { background: #fff; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.05); }

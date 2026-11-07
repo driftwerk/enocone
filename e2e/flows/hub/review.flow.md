@@ -6,19 +6,18 @@ priority: high
 stage: draft
 ---
 
-# Reviewers comment beside a draft flow, and the author approves it in git
+# Reviewers comment beside a draft flow
 
-Drafts are written to be argued about. On enocone.xyz a reviewer selects a
+Drafts are written to be argued about. On enoc.one a reviewer selects a
 sentence or a step and leaves a comment in the margin, the way they would on a
-document. When everyone agrees, approval lands in the flow file, in git, so
-the spec and the code stay in one place.
+document. Approval stays in the flow file, in git, so the spec and the code
+stay in one place; approving on the site comes later.
 
 ```flowchart
 flowchart LR
-  1[A draft is published] --> 2[Reviewers comment in the margin] --> 3[The author replies or edits]
-  3 --> 2
-  3 --> 4[Approve on the site] --> 5[enocone pulls approval into the flow file]
-  1 -.->|the flow changed| 6[Comments stay on their text or are marked outdated]
+  1[A draft is published] --> 2[Reviewers comment in the margin] --> 3[The author edits and publishes again]
+  3 --> 4[Comments stay on their text or are marked outdated] --> 5[Settled comments are resolved]
+  5 -.->|agreed| done[The author sets stage: approved in git]
 ```
 
 ## Rules
@@ -28,16 +27,12 @@ flowchart LR
 - A new version of the flow keeps a comment where its text is unchanged, and
   marks it **outdated** otherwise, still readable.
 - Anyone invited can comment; members can resolve.
-- Approving on the site records who approved and when, but doesn't edit the
-  repository. `enocone review pull` writes `stage: approved` and
-  `approved_by:` into the flow file for the author to commit.
+- Approving happens in the flow file, as today: the author sets
+  `stage: approved` and `approved_by:` and commits. Authors may approve their
+  own drafts.
+- Later (not in this version): an Approve button on the site, and a CI job
+  that opens a pull request writing the approvals into the flow files.
 - Comments also appear in the HTML report when it's downloaded from the site.
-
-## Open questions
-
-- Should `enocone review pull` run in CI and open a pull request with the
-  approvals, or stay a manual command? Manual is simpler to start with.
-- Can someone approve their own draft?
 
 ## Given
 
@@ -54,10 +49,8 @@ flowchart LR
 
 3. **Priya changes the rule to 30 days and publishes again**
 
-4. **Sam approves the draft**
-
 ## Then
 
-5. **The comment shows as outdated beside the new rule, and the flow shows Approved by Sam**
+4. **Sam's comment shows as outdated beside the new rule, still readable**
 
-6. **enocone review pull sets stage: approved and approved_by: Sam in the flow file**
+5. **Priya resolves the comment and it moves to the resolved list**

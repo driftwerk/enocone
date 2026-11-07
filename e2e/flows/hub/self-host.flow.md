@@ -9,7 +9,7 @@ stage: draft
 # Anyone can run their own enocone site with one command
 
 enocone is open source, and so is the site. `enocone serve` runs everything
-enocone.xyz runs, on one small machine, so a team can host its own if it
+enoc.one runs, on one small machine, so a team can host its own if it
 doesn't want its flows on someone else's server.
 
 ```flowchart
