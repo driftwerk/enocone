@@ -20,6 +20,12 @@ inputs:
   browsers:
     description: Browsers to install (space separated), or `none` for HTTP-only suites
     default: chromium
+  publish:
+    description: >-
+      Send the run to the team site named under [hub] in enocone.toml. Needs
+      `permissions: id-token: write` (GitHub vouches for the workflow), or an
+      ENOCONE_HUB_TOKEN secret in the environment.
+    default: "false"
 
 outputs:
   exit-code:
@@ -28,6 +34,9 @@ outputs:
   report:
     description: Path of the report folder
     value: ${{ steps.run.outputs.report }}
+  url:
+    description: Where the published run can be read (when publish is true)
+    value: ${{ steps.publish.outputs.url }}
 
 runs:
   using: composite
@@ -90,3 +99,25 @@ runs:
         name: ${{ inputs.report-name }}
         path: ${{ inputs.project }}/enocone-report
         if-no-files-found: ignore
+
+    - name: Publish to the team site
+      id: publish
+      if: always() && inputs.publish == 'true'
+      shell: bash
+      working-directory: ${{ inputs.project }}
+      run: |
+        if [ ! -f enocone-report/results.json ]; then
+          echo "::notice title=enocone::Nothing to publish: the run didn't produce results.json."
+          exit 0
+        fi
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -z "${ENOCONE_HUB_TOKEN:-}" ]; then
+          echo "::notice title=enocone::Not publishing: this job can't get an OIDC token. Add 'permissions: id-token: write' (pull requests from forks never get one)."
+          exit 0
+        fi
+        if url=$(enocone publish); then
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "::notice title=enocone::Published $url"
+          echo "Published to [$url]($url)" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "::warning title=enocone::Publishing failed; the report is still in the uploaded artifact."
+        fi

@@ -344,10 +344,14 @@ async fn login_email(State(app): State<App>, ConnectInfo(peer): ConnectInfo<Sock
             site = esc(&site),
             link = esc(&link)
         );
-        if let Err(e) = app.mailer.send(&email, &format!("Your sign-in link for {site}"), &text, &body).await {
-            tracing::error!("{e:#}");
-            eprintln!("[enocone serve] {e:#}");
-        }
+        // Sent in the background, so an invited address answers as fast as a stranger's.
+        let mailer = app.mailer.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mailer.send(&email, &format!("Your sign-in link for {site}"), &text, &body).await {
+                tracing::error!("{e:#}");
+                eprintln!("[enocone serve] {e:#}");
+            }
+        });
     }
     Ok(sent_page)
 }
