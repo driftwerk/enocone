@@ -41,7 +41,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # The action builds enocone from its own checkout, so `uses: enocone/enocone@<ref>`
+    # The action builds enocone from its own checkout, so `uses: driftwerk/enocone@<ref>`
     # pins the version. The cache key is a hash of that source (hashFiles can't
     # see the action's folder when it is outside the workspace).
     - name: Fingerprint enocone source

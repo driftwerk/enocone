@@ -126,7 +126,7 @@ responses. Override any env variable in CI with `ENOCONE_VAR_<NAME>`.
 ## CI
 
 ```yaml
-- uses: enocone/enocone@main
+- uses: driftwerk/enocone@v0
   with:
     project: e2e
     env: staging
