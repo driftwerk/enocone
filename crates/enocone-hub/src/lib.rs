@@ -321,7 +321,7 @@ async fn login_page(State(app): State<App>, h: HeaderMap, Query(q): Query<NextQ>
         return Ok(Redirect::to(&safe_next(q.next.as_deref())).into_response());
     }
     let github = app.cfg.github_client_id.is_some() && app.cfg.github_client_secret.is_some();
-    Ok(html(pages::login(&app.cfg.site(), github, &safe_next(q.next.as_deref()), q.error.as_deref())))
+    Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, &safe_next(q.next.as_deref()), q.error.as_deref())))
 }
 
 #[derive(Deserialize)]
@@ -453,7 +453,7 @@ async fn logout(State(app): State<App>, h: HeaderMap) -> R {
     if let Some(tok) = auth::cookie(&h, auth::SESSION_COOKIE) {
         app.db.with(|c| c.execute("DELETE FROM sessions WHERE token_hash = ?1", [auth::hash(&tok)]))?;
     }
-    let mut res = Redirect::to("/login").into_response();
+    let mut res = Redirect::to("/").into_response();
     res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&auth::clear_cookie(app.cfg.secure()))?);
     Ok(res)
 }
@@ -517,7 +517,7 @@ async fn cli_authorize(State(app): State<App>, h: HeaderMap, Form(q): Form<CliAu
 async fn home(State(app): State<App>, h: HeaderMap) -> R {
     let Some(user) = current_user(&app, &h)? else {
         let github = app.cfg.github_client_id.is_some() && app.cfg.github_client_secret.is_some();
-        return Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, None)));
+        return Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, "/", None)));
     };
     let projects = visible_projects(&app, &user)?;
     let owner = app.cfg.is_owner(&user);

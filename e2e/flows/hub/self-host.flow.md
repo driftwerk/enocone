@@ -55,7 +55,7 @@ flowchart LR
 3. **The owner signs in with an email link and creates the shop project**
    ```browser
    - goto: "http://127.0.0.1:18181/login"
-   - expect: { heading: Welcome }
+   - expect: { heading: Your team's flows }
    - fill: { label: Work email, value: "owner+{{run.short_id}}@example.test" }
    - click: Email me a sign-in link
    - expect: "a sign-in link is on its way"

@@ -49,61 +49,26 @@ fn brand(site: &str) -> String {
 }
 
 /// The home page for signed-out visitors: what enocone is, with the sign-in card.
-pub fn home(site: &str, github: bool, retention_days: u32, error: Option<&str>) -> String {
+pub fn home(site: &str, github: bool, retention_days: u32, next: &str, error: Option<&str>) -> String {
+    let gh_href = format!("/auth/github?next={}", esc(&urlenc(next)));
     let gh_block = if github {
         format!(
-            r#"<a href="/auth/github?next=%2F" class="h-btn" style="background:#0E1424;color:#fff">{GITHUB}Continue with GitHub</a>
+            r#"<a href="{gh_href}" class="h-btn" style="background:#0E1424;color:#fff">{GITHUB}Continue with GitHub</a>
         <div style="display:flex;align-items:center;gap:12px;color:#5F6678;font-size:13px"><span style="flex:1;height:1px;background:#E4E0D8"></span>or, without a GitHub account<span style="flex:1;height:1px;background:#E4E0D8"></span></div>"#
         )
     } else {
         String::new()
     };
-    let gh_cta = if github { r#"<a href="/auth/github?next=%2F" class="h-btn" style="background:#FBFAF7;color:#0E1424">Continue with GitHub</a>"# } else { "" };
+    let gh_cta = if github { format!(r#"<a href="{gh_href}" class="h-btn" style="background:#FBFAF7;color:#0E1424">Continue with GitHub</a>"#) } else { String::new() };
     let err = error.map(|e| format!(r#"<div class="notice fail" role="alert">{}</div>"#, esc(e))).unwrap_or_default();
     let body = include_str!("../assets/home.html")
         .replace("{{SITE}}", &esc(site))
         .replace("{{GITHUB_BLOCK}}", &gh_block)
-        .replace("{{GITHUB_CTA}}", gh_cta)
+        .replace("{{GITHUB_CTA}}", &gh_cta)
+        .replace("{{NEXT}}", &esc(next))
         .replace("{{ERROR}}", &err)
         .replace("{{RETENTION}}", &retention_days.to_string());
     doc(&format!("{site}: the spec your team reviews is the test that runs"), &body)
-}
-
-/// The sign-in page: a cover with the pitch, and the sign-in card.
-pub fn login(site: &str, github: bool, next: &str, error: Option<&str>) -> String {
-    let gh = if github {
-        format!(r#"<a class="btn wide" href="/auth/github?next={}">{GITHUB} Continue with GitHub</a><div class="or">or, without a GitHub account</div>"#, esc(&urlenc(next)))
-    } else {
-        String::new()
-    };
-    let err = error.map(|e| format!(r#"<div class="notice fail" role="alert">{}</div>"#, esc(e))).unwrap_or_default();
-    doc(
-        &format!("Sign in · {site}"),
-        &format!(
-            r#"<div class="cover gate">
-  <div class="pitch">
-    {brand}
-    <h1>Flows your whole team can <em class="hl">read, argue about</em> and run.</h1>
-    <p class="lede">The spec people review is the test that runs. Drafts with mockups, runs with screenshots, comments in the margin.</p>
-    <div class="stages"><span style="color:#B9ACFF">Draft</span><span style="color:#F2C46D">Review</span><span style="color:#93B4FF">Approved</span><span style="color:#7DD9A6">Implemented</span></div>
-  </div>
-  <main class="card">
-    <div class="kicker">Sign in</div>
-    <h2>Welcome</h2>
-    {err}
-    {gh}
-    <form method="post" action="/login/email" style="display:flex;flex-direction:column;gap:12px">
-      <input type="hidden" name="next" value="{next}">
-      <div class="field"><label for="email">Work email</label><input id="email" name="email" type="email" required autocomplete="email" placeholder="you@company.com"></div>
-      <button class="btn iris wide" type="submit">Email me a sign-in link</button>
-    </form>
-    <p class="small muted" style="margin:0">Only people a project owner has invited, or who belong to a GitHub team the project is shared with, can sign in.</p>
-  </main>
-</div>"#,
-            brand = brand(site),
-            next = esc(next)
-        ),
-    )
 }
 
 pub fn link_sent(site: &str, email: &str) -> String {

@@ -61,7 +61,7 @@ flowchart LR
    ```
    ```browser
    - goto: "http://127.0.0.1:18182/login"
-   - expect: { heading: Welcome }
+   - expect: { heading: Your team's flows }
    - expect: { button: Email me a sign-in link }
    - screenshot
    ```

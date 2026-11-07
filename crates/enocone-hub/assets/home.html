@@ -34,7 +34,7 @@
         <div class="kicker">Sign in</div>
         <h2 id="signin-h" class="serif" style="font-size:30px;line-height:1.1">Your team's flows</h2>
         {{GITHUB_BLOCK}}
-        {{ERROR}}<form method="post" action="/login/email" style="display:flex;flex-direction:column;gap:12px;margin:0"><input type="hidden" name="next" value="/">
+        {{ERROR}}<form method="post" action="/login/email" style="display:flex;flex-direction:column;gap:12px;margin:0"><input type="hidden" name="next" value="{{NEXT}}">
         <label for="email" style="font-size:13.5px;font-weight:600">Work email</label>
         <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@company.com" style="min-height:48px;border:1px solid #CFC9BD;border-radius:10px;padding:0 14px;font:15px Inter,sans-serif;box-sizing:border-box;width:100%">
         <button type="submit" class="h-btn" style="background:#5B3DF0;color:#fff;border:0;cursor:pointer">Email me a sign-in link</button></form>
