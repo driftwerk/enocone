@@ -104,6 +104,11 @@ pub fn app() -> Router {
         .route("/oidc/.well-known/openid-configuration", get(oidc_config))
         .route("/oidc/.well-known/jwks", get(oidc_jwks))
         .route("/oidc/token", get(oidc_token))
+        .route("/github/login/oauth/authorize", get(gh_authorize_page).post(gh_authorize))
+        .route("/github/login/oauth/access_token", post(gh_access_token))
+        .route("/github/api/user", get(gh_user))
+        .route("/github/api/user/emails", get(gh_emails))
+        .route("/github/api/user/teams", get(gh_teams))
         .route("/postmark/messages/outbound", get(postmark_list))
         .route("/postmark/messages/outbound/{id}/details", get(postmark_details))
         .route("/mailpit/api/v1/search", get(mailpit_search))
@@ -388,6 +393,84 @@ async fn oidc_token(h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> R
         Ok(t) => Json(json!({ "count": 1, "value": t })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ------------------------------------------------------------------ GitHub OAuth stand-in
+//
+// "Continue with GitHub" against a page where the test types who it is:
+// a login, its teams (org/team, comma separated) and whether its email is
+// verified. The access token is just the encoded identity.
+
+fn form_page(title: &str, body: &str) -> Html<String> {
+    page(title, body)
+}
+
+async fn gh_authorize_page(Query(q): Query<HashMap<String, String>>) -> Html<String> {
+    let v = |k: &str| q.get(k).map(|s| s.replace('"', "&quot;").replace('<', "&lt;")).unwrap_or_default();
+    form_page(
+        "Sign in to GitHub",
+        &format!(
+            r#"<h1>Sign in to GitHub to continue to the app</h1><form method="post"><input type="hidden" name="redirect_uri" value="{}"><input type="hidden" name="state" value="{}"><input type="hidden" name="scope" value="{}">
+<label>GitHub login <input name="login" required></label>
+<label>Teams <input name="teams"></label>
+<label>Email verified <input type="checkbox" name="verified" value="yes" checked></label>
+<button type="submit">Authorize</button></form><p>Scopes requested: {}</p>"#,
+            v("redirect_uri"),
+            v("state"),
+            v("scope"),
+            v("scope")
+        ),
+    )
+}
+
+async fn gh_authorize(Form(f): Form<HashMap<String, String>>) -> Response {
+    let get = |k: &str| f.get(k).cloned().unwrap_or_default();
+    let ident = json!({ "login": get("login"), "teams": get("teams"), "verified": get("verified") == "yes" });
+    let code = base64_url(&ident.to_string());
+    let redirect = get("redirect_uri");
+    let sep = if redirect.contains('?') { '&' } else { '?' };
+    Redirect::to(&format!("{redirect}{sep}code={code}&state={}", get("state"))).into_response()
+}
+
+fn base64_url(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+fn ident_from(token: &str) -> Option<Value> {
+    let hex = token.strip_prefix("gho_")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|i| hex.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok())).collect();
+    serde_json::from_slice(&bytes?).ok()
+}
+
+async fn gh_access_token(Form(f): Form<HashMap<String, String>>) -> Response {
+    if f.get("client_secret").map(String::as_str) != Some("fixture-github-secret") {
+        return Json(json!({ "error": "incorrect_client_credentials" })).into_response();
+    }
+    Json(json!({ "access_token": format!("gho_{}", f.get("code").cloned().unwrap_or_default()), "token_type": "bearer", "scope": "read:user,user:email,read:org" })).into_response()
+}
+
+fn gh_ident(h: &HeaderMap) -> Option<Value> {
+    let t = h.get(header::AUTHORIZATION)?.to_str().ok()?;
+    ident_from(t.strip_prefix("Bearer ").or_else(|| t.strip_prefix("token "))?)
+}
+
+async fn gh_user(h: HeaderMap) -> Response {
+    let Some(i) = gh_ident(&h) else { return unauthorised() };
+    let login = i["login"].as_str().unwrap_or("");
+    let id: u64 = login.bytes().fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64)) % 1_000_000_000;
+    Json(json!({ "login": login, "id": id, "name": login })).into_response()
+}
+
+async fn gh_emails(h: HeaderMap) -> Response {
+    let Some(i) = gh_ident(&h) else { return unauthorised() };
+    Json(json!([{ "email": format!("{}@example.test", i["login"].as_str().unwrap_or("")), "primary": true, "verified": i["verified"].as_bool().unwrap_or(false) }])).into_response()
+}
+
+async fn gh_teams(h: HeaderMap) -> Response {
+    let Some(i) = gh_ident(&h) else { return unauthorised() };
+    let teams: Vec<Value> =
+        i["teams"].as_str().unwrap_or("").split(',').map(str::trim).filter_map(|t| t.split_once('/')).map(|(org, slug)| json!({ "slug": slug, "organization": { "login": org } })).collect();
+    Json(Value::Array(teams)).into_response()
 }
 
 /// Postmark's send API (`POST /email`): what enocone serve uses for sign-in links.

@@ -7,6 +7,7 @@
 
 mod auth;
 mod db;
+mod github;
 mod mail;
 mod oidc;
 mod pages;
@@ -41,6 +42,9 @@ pub struct Config {
     pub owner_email: Option<String>,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
+    /// github.com and its API (overridable so tests can point them at a stand-in).
+    pub github_url: String,
+    pub github_api_url: String,
     pub postmark_token: Option<String>,
     /// Postmark's API (overridable so tests can point it at a stand-in).
     pub postmark_url: String,
@@ -131,6 +135,8 @@ impl App {
             .route("/login/sent", get(login_sent))
             .route("/auth/email", get(auth_email_page).post(auth_email))
             .route("/logout", post(logout))
+            .route("/auth/github", get(github::start))
+            .route("/auth/github/callback", get(github::callback))
             .route("/", get(home))
             .route("/projects", post(create_project))
             .route("/tokens", post(runs::new_token))
@@ -604,7 +610,7 @@ async fn members_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<Str
     for (kind, subject, r) in &rows {
         let r = Role::parse(r).unwrap_or(Role::Reviewer);
         let (initial, how) = match kind.as_str() {
-            "team" => ("◆".to_string(), "GitHub team · checked at each sign-in"),
+            "team" => ("◆".to_string(), "GitHub team · checked at each sign-in. If the organisation restricts OAuth apps, an org owner must approve this site first."),
             "github" => (subject.chars().next().unwrap_or('?').to_uppercase().to_string(), "GitHub"),
             _ => (subject.chars().next().unwrap_or('?').to_uppercase().to_string(), "email link or GitHub"),
         };

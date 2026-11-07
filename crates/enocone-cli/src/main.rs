@@ -187,6 +187,10 @@ struct ServeArgs {
     github_client_id: Option<String>,
     #[arg(long, env = "ENOCONE_GITHUB_CLIENT_SECRET", hide_env_values = true)]
     github_client_secret: Option<String>,
+    #[arg(long, env = "ENOCONE_GITHUB_URL", default_value = "https://github.com", hide = true)]
+    github_url: String,
+    #[arg(long, env = "ENOCONE_GITHUB_API_URL", default_value = "https://api.github.com", hide = true)]
+    github_api_url: String,
     /// Postmark server token for sign-in emails. Without one, emails are printed to the log.
     #[arg(long, env = "ENOCONE_POSTMARK_TOKEN", hide_env_values = true)]
     postmark_token: Option<String>,
@@ -237,6 +241,8 @@ async fn serve(a: &ServeArgs) -> anyhow::Result<i32> {
         owner_email: non_empty(&a.owner_email).map(|e| e.to_lowercase()),
         github_client_id: non_empty(&a.github_client_id),
         github_client_secret: non_empty(&a.github_client_secret),
+        github_url: a.github_url.trim_end_matches('/').to_string(),
+        github_api_url: a.github_api_url.trim_end_matches('/').to_string(),
         postmark_token: non_empty(&a.postmark_token),
         postmark_url: a.postmark_url.clone(),
         mail_from: non_empty(&a.mail_from).unwrap_or_else(|| format!("noreply@{host}")),

@@ -55,8 +55,8 @@ flowchart LR
    ```
    ```exec
    run: |
-     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18182 "{{run.tmp}}/site"
-     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18182 "{{run.tmp}}/site" project:shop:Shop project:billing:Billing "invite:shop:sam+{{run.short_id}}@example.test:reviewer"
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" GH_CLIENT=fixture-github-client sh "{{env.FIXTURES}}/hub/start.sh" 18182 "{{run.tmp}}/site"
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18182 "{{run.tmp}}/site" project:shop:Shop project:billing:Billing "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "invite:shop:acme/qa:member"
    expect: { stdout: seeded }
    ```
    ```browser
@@ -139,9 +139,27 @@ flowchart LR
      json:
        $.TotalCount: 0
    ```
+
+7. **Dev, a member of the GitHub team acme/qa that was granted shop, signs in with GitHub and sees shop**
+   ```browser
+   - goto: "http://127.0.0.1:18182/login"
+   - click: Continue with GitHub
+   - expect: "Scopes requested: read:user user:email read:org"
+   - fill: { label: GitHub login, value: "dev-{{run.short_id}}" }
+   - fill: { label: Teams, value: "acme/qa, acme/design" }
+   - click: Authorize
+   - expect: { heading: Your projects }
+   - expect: { link: Shop }
+   - expect: { link: Billing, hidden: true }
+   - expect: "Signed in as dev-{{run.short_id}}"
+   - click: Sign out
+   - click: Continue with GitHub
+   - fill: { label: GitHub login, value: "outsider-{{run.short_id}}" }
+   - fill: { label: Teams, value: "acme/design" }
+   - click: Authorize
+   - expect: { heading: "@outsider-{{run.short_id}} isn't on any project here" }
+   ```
    ```exec
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18182
    ```
-
-7. **Dev, a member of the GitHub team acme/qa that was granted shop, signs in with GitHub and sees shop**

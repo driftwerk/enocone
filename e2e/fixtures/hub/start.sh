@@ -4,7 +4,8 @@
 # Needs BIN (the enocone binary), WEB (the fixture app, for its Postmark
 # stand-in) and OWNER (the owner's email). Output goes to DATA/serve.log so
 # the exec step doesn't wait on it; the server stops itself after 3 minutes
-# in case the flow fails before stopping it.
+# in case the flow fails before stopping it. GH_CLIENT=<id> turns on
+# GitHub sign-in against the fixture's GitHub stand-in.
 set -eu
 port=$1 data=$2
 pidf="${TMPDIR:-/tmp}/enocone-e2e-hub-$port.pid"
@@ -12,7 +13,8 @@ if [ -f "$pidf" ]; then kill "$(cat "$pidf")" 2>/dev/null || true; sleep 0.2; fi
 mkdir -p "$data"
 ENOCONE_DATA="$data" ENOCONE_LISTEN="127.0.0.1:$port" ENOCONE_PUBLIC_URL="http://127.0.0.1:$port" \
 ENOCONE_OWNER_EMAIL="$OWNER" ENOCONE_POSTMARK_URL="$WEB/postmark" ENOCONE_POSTMARK_TOKEN=fixture-postmark-token \
-ENOCONE_GITHUB_CLIENT_ID= ENOCONE_GITHUB_CLIENT_SECRET= ENOCONE_OIDC_ISSUER="$WEB/oidc" \
+ENOCONE_GITHUB_CLIENT_ID="${GH_CLIENT:-}" ENOCONE_GITHUB_CLIENT_SECRET="${GH_CLIENT:+fixture-github-secret}" \
+ENOCONE_GITHUB_URL="$WEB/github" ENOCONE_GITHUB_API_URL="$WEB/github/api" ENOCONE_OIDC_ISSUER="$WEB/oidc" \
   "$BIN" serve >>"$data/serve.log" 2>&1 &
 pid=$!
 echo "$pid" > "$pidf"
