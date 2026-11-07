@@ -80,19 +80,18 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
       - name: Update the Homebrew formula
         env:
-          TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          # A fine-grained token with Contents: read and write on driftwerk/homebrew-tap
+          # (the same kind workforce's release uses; the org has deploy keys turned off).
+          TAP_TOKEN: ${{ secrets.TAP_RELEASE_TOKEN }}
         run: |
-          if [ -z "$TAP_DEPLOY_KEY" ]; then
-            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY isn't set; the formula wasn't updated."
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::TAP_RELEASE_TOKEN isn't set; the formula wasn't updated."
             exit 0
           fi
-          mkdir -p ~/.ssh && printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-          git clone -q git@github.com:driftwerk/homebrew-tap.git tap
+          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/driftwerk/homebrew-tap.git" tap
           sh .github/scripts/homebrew-formula.sh "${GITHUB_REF_NAME#v}" dist > tap/Formula/enocone.rb
           cd tap
-          git config user.name "enocone release"
-          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/enocone.rb
-          if git commit -qm "enocone ${GITHUB_REF_NAME#v}"; then git push -q origin HEAD; else echo "formula unchanged"; fi
-          rm -f ~/.ssh/tap
+          if git commit -qm "enocone ${GITHUB_REF_NAME#v}"; then git push -q origin HEAD:main; else echo "formula unchanged"; fi
