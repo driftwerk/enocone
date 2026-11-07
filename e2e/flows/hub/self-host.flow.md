@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, serve]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # Anyone can run their own enocone site with one command
@@ -34,13 +35,62 @@ flowchart LR
 ## Given
 
 1. **An empty data folder and an owner email**
+   ```exec
+   run: |
+     mkdir -p "{{run.tmp}}/site" && ls -A "{{run.tmp}}/site" | wc -l | tr -d ' '
+   expect: { stdout: "0" }
+   ```
 
 ## When
 
 2. **enocone serve starts on port 8080**
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18181 "{{run.tmp}}/site" && curl -fsS http://127.0.0.1:18181/healthz
+   expect: { stdout: "ready on port 18181" }
+   ```
 
 ## Then
 
 3. **The owner signs in with an email link and creates the shop project**
+   ```browser
+   - goto: "http://127.0.0.1:18181/"
+   - expect: { heading: Welcome }
+   - fill: { label: Work email, value: "owner+{{run.short_id}}@example.test" }
+   - click: Email me a sign-in link
+   - expect: "a sign-in link is on its way"
+   ```
+   ```email
+   to: "owner+{{run.short_id}}@example.test"
+   subject: Your sign-in link
+   within: 10s
+   expect: { body: "expires in 15 minutes" }
+   capture: { sign_in: { link: "/auth/email" } }
+   ```
+   ```browser
+   - goto: "{{sign_in}}"
+   - click: Sign in to
+   - expect: { heading: Your projects }
+   - fill: { label: Short name, value: shop }
+   - fill: { label: Display name, value: Shop }
+   - click: Create project
+   - expect: { heading: Shop }
+   - expect: "No runs yet"
+   ```
 
 4. **Restarting the server keeps the project and the owner's session**
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18181 && BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18181 "{{run.tmp}}/site"
+   expect: { stdout: "ready on port 18181" }
+   ```
+   ```browser
+   - goto: "http://127.0.0.1:18181/shop"
+   - expect: { heading: Shop }
+   - expect: { text: Signed in as }
+   - screenshot
+   ```
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18181
+   ```

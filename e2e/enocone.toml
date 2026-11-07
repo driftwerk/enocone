@@ -19,3 +19,9 @@ ENOCONE_BIN = "../target/debug/enocone"
 FIXTURES = "fixtures"
 WEB = "http://127.0.0.1:4010"
 API = "http://127.0.0.1:4010/api"
+
+# Sign-in emails from `enocone serve` go to the fixture's Postmark stand-in.
+[email]
+provider = "postmark"
+url = "{{env.WEB}}/postmark"
+token = "fixture-postmark-token"

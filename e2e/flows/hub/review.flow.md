@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, review, comments]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # Reviewers comment beside a draft flow

@@ -100,6 +100,7 @@ pub fn app() -> Router {
         .route("/pay-quote/{id}/payment-success", get(paid_page))
         .route("/lead/{id}/milestones", get(milestones))
         // Emulated sandbox mailboxes (read-only APIs, same shapes as the real ones).
+        .route("/postmark/email", post(postmark_send))
         .route("/postmark/messages/outbound", get(postmark_list))
         .route("/postmark/messages/outbound/{id}/details", get(postmark_details))
         .route("/mailpit/api/v1/search", get(mailpit_search))
@@ -333,6 +334,22 @@ fn emails_to(db: &Db, to: &str) -> Vec<Email> {
 
 fn postmark_ok(h: &HeaderMap) -> bool {
     h.get("x-postmark-server-token").and_then(|v| v.to_str().ok()) == Some(POSTMARK_TOKEN)
+}
+
+/// Postmark's send API (`POST /email`): what enocone serve uses for sign-in links.
+async fn postmark_send(State(s): State<S>, h: HeaderMap, Json(b): Json<Value>) -> Response {
+    if !postmark_ok(&h) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "ErrorCode": 10, "Message": "Bad or missing Server API token." }))).into_response();
+    }
+    let field = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let to = field("To");
+    if to.is_empty() || field("From").is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "ErrorCode": 300, "Message": "Invalid email request" }))).into_response();
+    }
+    let e = Email { id: id("pm"), to: to.clone(), from: field("From"), subject: field("Subject"), text: field("TextBody"), html: field("HtmlBody"), sent_at: now_rfc3339() };
+    let mid = e.id.clone();
+    s.lock().unwrap().emails.push(e);
+    Json(json!({ "To": to, "SubmittedAt": now_rfc3339(), "MessageID": mid, "ErrorCode": 0, "Message": "OK" })).into_response()
 }
 
 async fn postmark_list(State(s): State<S>, h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Response {

@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, publish, ci]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # A run is published to enoc.one from a laptop or from CI
@@ -27,8 +28,10 @@ flowchart LR
   Mockups stay in sandboxed frames, as in the report.
 - Uploads are capped (50 MB per run) and only PNG screenshots are accepted
   beside the results.
-- `enocone login` stores a personal token in the OS keychain. Tokens can be
-  listed and revoked on the site.
+- `enocone login` stores a personal token in the OS keychain where there is
+  one (macOS, Windows, Secret Service), otherwise in
+  `~/.config/enocone/credentials` readable only by the user. CI uses GitHub
+  OIDC or `ENOCONE_HUB_TOKEN`. Tokens can be listed and revoked on the site.
 - In GitHub Actions, the action requests an OIDC token for audience
   `https://enoc.one`. The site checks GitHub's signature, the issuer,
   expiry and audience, and accepts it only for projects linked to that

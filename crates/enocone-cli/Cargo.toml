@@ -16,6 +16,7 @@ enocone-engine.workspace = true
 enocone-driver-playwright.workspace = true
 enocone-report.workspace = true
 enocone-mcp.workspace = true
+enocone-hub.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true

@@ -17,6 +17,16 @@ pub struct ReportOptions {
 
 /// Render the HTML page for `results` (screenshots resolved against `assets_root`).
 pub fn render_html(results: &RunResults, assets_root: &Path, opts: &ReportOptions) -> anyhow::Result<String> {
+    render_html_with(results, assets_root, opts, serde_json::Map::new())
+}
+
+/// The report's one inline script, exactly as it appears in the page (for a CSP hash).
+pub fn inline_script() -> String {
+    format!("\n{JS}\n")
+}
+
+/// Like [`render_html`], with extra top-level fields for the page script (e.g. `comments`).
+pub fn render_html_with(results: &RunResults, assets_root: &Path, opts: &ReportOptions, extra: serde_json::Map<String, serde_json::Value>) -> anyhow::Result<String> {
     let mut data = results.clone();
     if opts.inline_assets {
         for fr in &mut data.flows {
@@ -32,7 +42,11 @@ pub fn render_html(results: &RunResults, assets_root: &Path, opts: &ReportOption
         }
     }
     // Make the JSON safe inside <script>.
-    let json = serde_json::to_string(&data)?.replace("</", "<\\/").replace("<!--", "<\\!--");
+    let mut value = serde_json::to_value(&data)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.extend(extra);
+    }
+    let json = serde_json::to_string(&value)?.replace("</", "<\\/").replace("<!--", "<\\!--");
     let title = if results.run.executed { format!("{} · enocone report", results.run.project) } else { format!("{} · flow documentation", results.run.project) };
     let mut html = String::with_capacity(json.len() + CSS.len() + JS.len() + 1024);
     html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");

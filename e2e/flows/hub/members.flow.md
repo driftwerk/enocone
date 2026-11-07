@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, members]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # Project owners invite the team, and everything is private by default

@@ -16,6 +16,7 @@ enocone-driver-playwright = { path = "crates/enocone-driver-playwright" }
 enocone-report = { path = "crates/enocone-report" }
 enocone-mcp = { path = "crates/enocone-mcp" }
 enocone-fixture = { path = "crates/enocone-fixture" }
+enocone-hub = { path = "crates/enocone-hub" }
 
 anyhow = "1.0.104"
 async-trait = "0.1.92"

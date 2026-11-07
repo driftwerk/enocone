@@ -79,6 +79,8 @@ enum Cmd {
         #[arg(long, default_value = "my-app")]
         name: String,
     },
+    /// Run the team site where flow documents, runs and review comments are shared.
+    Serve(ServeArgs),
     /// Install the browsers matching the bundled Playwright version.
     InstallBrowsers {
         /// chromium, firefox, webkit (default: chromium)
@@ -139,6 +141,73 @@ struct RunArgs {
     /// the real app. Draft flows run too; http and exec steps are skipped.
     #[arg(long)]
     prototype: bool,
+}
+
+#[derive(clap::Args)]
+struct ServeArgs {
+    /// The address people use, e.g. https://enoc.one (links in emails and secure cookies follow it).
+    #[arg(long, env = "ENOCONE_PUBLIC_URL", default_value = "http://127.0.0.1:8080")]
+    public_url: String,
+    /// Where to listen; put Caddy or another proxy in front for HTTPS.
+    #[arg(long, env = "ENOCONE_LISTEN", default_value = "127.0.0.1:8080")]
+    listen: std::net::SocketAddr,
+    /// Data folder: the SQLite database and published runs.
+    #[arg(long, env = "ENOCONE_DATA", default_value = "enocone-data")]
+    data: PathBuf,
+    /// The site owner: may always sign in and creates projects.
+    #[arg(long, env = "ENOCONE_OWNER_EMAIL")]
+    owner_email: Option<String>,
+    #[arg(long, env = "ENOCONE_GITHUB_CLIENT_ID", hide_env_values = true)]
+    github_client_id: Option<String>,
+    #[arg(long, env = "ENOCONE_GITHUB_CLIENT_SECRET", hide_env_values = true)]
+    github_client_secret: Option<String>,
+    /// Postmark server token for sign-in emails. Without one, emails are printed to the log.
+    #[arg(long, env = "ENOCONE_POSTMARK_TOKEN", hide_env_values = true)]
+    postmark_token: Option<String>,
+    #[arg(long, env = "ENOCONE_POSTMARK_URL", default_value = "https://api.postmarkapp.com", hide = true)]
+    postmark_url: String,
+    /// The From address of sign-in emails (default: noreply@ the site's host).
+    #[arg(long, env = "ENOCONE_MAIL_FROM")]
+    mail_from: Option<String>,
+    /// Days runs are kept (flow documents and comments are kept).
+    #[arg(long, env = "ENOCONE_RUN_RETENTION_DAYS", default_value_t = 30)]
+    run_retention_days: u32,
+    /// Print a one-time sign-in link for this address and exit (first sign-in, before email is set up).
+    #[arg(long, value_name = "EMAIL")]
+    sign_in_link: Option<String>,
+    /// Print a new publish token for this address and exit (e.g. for a CI secret).
+    #[arg(long, value_name = "EMAIL")]
+    new_token: Option<String>,
+}
+
+fn non_empty(v: &Option<String>) -> Option<String> {
+    v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+async fn serve(a: &ServeArgs) -> anyhow::Result<i32> {
+    let host = a.public_url.split("://").nth(1).unwrap_or(&a.public_url).split(['/', ':']).next().unwrap_or("localhost").to_string();
+    let cfg = enocone_hub::Config {
+        public_url: a.public_url.trim_end_matches('/').to_string(),
+        listen: a.listen,
+        data: a.data.clone(),
+        owner_email: non_empty(&a.owner_email).map(|e| e.to_lowercase()),
+        github_client_id: non_empty(&a.github_client_id),
+        github_client_secret: non_empty(&a.github_client_secret),
+        postmark_token: non_empty(&a.postmark_token),
+        postmark_url: a.postmark_url.clone(),
+        mail_from: non_empty(&a.mail_from).unwrap_or_else(|| format!("noreply@{host}")),
+        run_retention_days: a.run_retention_days,
+    };
+    if let Some(email) = &a.sign_in_link {
+        println!("{}", enocone_hub::App::new(cfg)?.sign_in_link(email)?);
+        return Ok(0);
+    }
+    if let Some(email) = &a.new_token {
+        println!("{}", enocone_hub::App::new(cfg)?.create_token(email, "created by enocone serve --new-token")?);
+        return Ok(0);
+    }
+    enocone_hub::serve(cfg).await?;
+    Ok(0)
 }
 
 struct Colors {
@@ -272,6 +341,7 @@ async fn real_main(cli: Cli) -> anyhow::Result<i32> {
             eprintln!("installed: {}", list.join(", "));
             Ok(0)
         }
+        Cmd::Serve(a) => serve(a).await,
         Cmd::Mcp => {
             // Load the project (and .enocone.env secrets) once, up front.
             let project = load_project(&cli)?;

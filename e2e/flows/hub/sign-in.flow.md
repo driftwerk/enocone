@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, sign-in]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # Teammates sign in with GitHub or a one-time email link
@@ -39,8 +40,9 @@ flowchart LR
   hash. Asking for links is rate limited per address and per IP.
 - The page says the same thing whether or not the address is invited, so it
   can't be used to discover who is on a team.
-- GitHub sign-in asks only for the user's identity and email (`read:user`,
-  `user:email`), never repository access.
+- GitHub sign-in asks for the user's identity, email and organisation/team
+  membership (`read:user`, `user:email`, `read:org`), so team grants can be
+  checked; never repository access.
 - Sessions last 30 days in an HttpOnly, Secure, SameSite=Lax cookie.
 
 ## Given
@@ -51,6 +53,18 @@ flowchart LR
    title: Sign in
    path: /login
    ```
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18182 "{{run.tmp}}/site"
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18182 "{{run.tmp}}/site" project:shop:Shop project:billing:Billing "invite:shop:sam+{{run.short_id}}@example.test:reviewer"
+   expect: { stdout: seeded }
+   ```
+   ```browser
+   - goto: "http://127.0.0.1:18182/"
+   - expect: { heading: Welcome }
+   - expect: { button: Email me a sign-in link }
+   - screenshot
+   ```
 
 ## When
 
@@ -60,8 +74,26 @@ flowchart LR
    title: Link sent
    path: /login/sent
    ```
+   ```browser
+   - fill: { label: Work email, value: "sam+{{run.short_id}}@example.test" }
+   - click: Email me a sign-in link
+   - expect: "a sign-in link is on its way"
+   - expect: "expires in 15 minutes"
+   - screenshot
+   ```
 
 3. **Sam opens the link from the email**
+   ```email
+   to: "sam+{{run.short_id}}@example.test"
+   subject: Your sign-in link
+   within: 10s
+   capture: { sign_in: { link: "/auth/email" } }
+   ```
+   ```browser
+   - goto: "{{sign_in}}"
+   - expect: "Continue as sam+"
+   - click: Sign in to
+   ```
 
 ## Then
 
@@ -71,9 +103,42 @@ flowchart LR
    title: Project page
    path: /shop
    ```
+   ```browser
+   - expect: { heading: Your projects }
+   - expect: { link: Shop }
+   - expect: { link: Billing, hidden: true }
+   - screenshot
+   ```
+   ```browser
+   - goto: "http://127.0.0.1:18182/billing"
+   - expect: { heading: Not found }
+   - expect: "you don't have access to it"
+   ```
 
 5. **Opening the same link again shows that it has been used**
+   ```browser
+   - goto: "{{sign_in}}"
+   - expect: { heading: This link has already been used }
+   - expect: { link: Get a new link }
+   ```
 
 6. **Asking for a link for an address nobody invited shows the same message and sends nothing**
+   ```browser
+   - goto: "http://127.0.0.1:18182/"
+   - click: Sign out
+   - fill: { label: Work email, value: "stranger+{{run.short_id}}@example.test" }
+   - click: Email me a sign-in link
+   - expect: "a sign-in link is on its way"
+   ```
+   ```http
+   GET: "{{env.WEB}}/postmark/messages/outbound"
+   headers: { X-Postmark-Server-Token: fixture-postmark-token }
+   query: { recipient: "stranger+{{run.short_id}}@example.test" }
+   expect: { status: 200, json: { $.TotalCount: 0 } }
+   ```
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18182
+   ```
 
 7. **Dev, a member of the GitHub team acme/qa that was granted shop, signs in with GitHub and sees shop**
