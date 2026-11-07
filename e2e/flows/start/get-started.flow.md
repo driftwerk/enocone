@@ -3,7 +3,8 @@ area: Getting started
 tags: [hub, home]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # The home page shows how to start with an AI tool in three steps

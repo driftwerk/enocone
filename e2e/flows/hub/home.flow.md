@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, home]
 owner: enocone
 priority: normal
-stage: review
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # Someone new to enoc.one learns what enocone is and signs in from the home page

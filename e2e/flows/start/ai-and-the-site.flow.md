@@ -3,7 +3,8 @@ area: Getting started
 tags: [mcp, hub, review]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # The AI tool works with the team site: it publishes drafts and answers review comments

@@ -3,7 +3,8 @@ area: Getting started
 tags: [init, mcp, hub, ci]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # One command connects a project to the AI tool, the team site and CI

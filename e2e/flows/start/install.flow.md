@@ -3,7 +3,8 @@ area: Getting started
 tags: [install, brew, release]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-07)
 ---
 
 # A developer installs enocone with Homebrew and runs a browser flow straight away
