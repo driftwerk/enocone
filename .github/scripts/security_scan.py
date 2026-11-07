@@ -3,7 +3,8 @@
 
 Writes a Markdown report and exits 1 when anything needs action: a CRITICAL vulnerability with a fix
 available, or software already past its end-of-life date. HIGH findings and software reaching end of life
-within three months are reported without failing.
+within three months are reported without failing. When xeol cannot load its end-of-life database, the
+image's end-of-life scan is reported as not done, with a warning, and Trivy's result alone decides.
 """
 
 import argparse
@@ -17,6 +18,11 @@ TRIVY = "aquasec/trivy:0.69.3"
 XEOL = "noqcks/xeol:v0.10.8"
 TRIVY_CACHE = os.path.expanduser("~/.cache/trivy")
 DOCKER_SOCKET = ["-v", "/var/run/docker.sock:/var/run/docker.sock"]
+EOL_DB_UNAVAILABLE = ("failed to load EOL db", "eol database is invalid")
+
+
+class EolDbUnavailable(RuntimeError):
+    pass
 
 
 def run_json(cmd):
@@ -49,7 +55,12 @@ def trivy(target_args):
 
 
 def xeol(image):
-    report = run_json(["docker", "run", "--rm", *DOCKER_SOCKET, XEOL, "--platform", "linux/amd64", "-q", "-l", "3m", "-o", "json", image])
+    try:
+        report = run_json(["docker", "run", "--rm", *DOCKER_SOCKET, XEOL, "--platform", "linux/amd64", "-q", "-l", "3m", "-o", "json", image])
+    except RuntimeError as e:
+        if any(marker in str(e) for marker in EOL_DB_UNAVAILABLE):
+            raise EolDbUnavailable(str(e)) from e
+        raise
     today = datetime.date.today().isoformat()
     found = []
     for match in report.get("matches") or []:
@@ -65,13 +76,20 @@ def xeol(image):
 
 def scan_image(image):
     vulns = trivy(([], ["image", "--platform", "linux/amd64"], [image]))
-    return {"target": image, "vulns": vulns, "eol": xeol(image)}
+    try:
+        return {"target": image, "vulns": vulns, "eol": xeol(image), "eol_skipped": None}
+    except EolDbUnavailable as e:
+        print(
+            f"::warning title=No end-of-life scan::{image} was not scanned for end-of-life software: "
+            "xeol could not load its database. Trivy's scan still gates.",
+        )
+        return {"target": image, "vulns": vulns, "eol": [], "eol_skipped": str(e)}
 
 
 def scan_tree(path):
     mount = os.path.abspath(path)
     vulns = trivy((["-v", f"{mount}:/src:ro"], ["fs", "--skip-dirs", "**/node_modules,**/target"], ["/src"]))
-    return {"target": f"source: {path}", "vulns": vulns, "eol": []}
+    return {"target": f"source: {path}", "vulns": vulns, "eol": [], "eol_skipped": None}
 
 
 def needs_action(scan):
@@ -88,11 +106,14 @@ def render(title, scans, errors):
         high = sum(1 for v in scan["vulns"] if v["severity"] == "HIGH")
         unfixed = sum(1 for v in scan["vulns"] if v["severity"] == "CRITICAL" and not v["fixed"])
         soon = [e for e in scan["eol"] if not e["past"]]
-        if not (critical or past_eol or high or unfixed or soon):
+        skipped = scan["eol_skipped"]
+        if not (critical or past_eol or high or unfixed or soon or skipped):
             continue
         flagged += 1
         status = "ACTION NEEDED" if critical or past_eol else "review"
         lines += [f"## `{scan['target']}` ({status})", ""]
+        if skipped:
+            lines.append("- **No end-of-life scan was done**: xeol could not load its database. Trivy's scan ran and still gates.")
         for e in past_eol:
             lines.append(f"- **End of life**: {e['product']} {e['version']} reached end of life on {e['eol']}")
         for e in soon:
