@@ -1,4 +1,6 @@
 target
-**/enocone-report
+# Generated reports (the folder name is shared with the enocone-report crate, so name them exactly)
+e2e/enocone-report
+examples/*/enocone-report
 **/.enocone
 .git
