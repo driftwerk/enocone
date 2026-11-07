@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 axum = { workspace = true, features = ["form", "json", "query"] }
-jsonwebtoken = "9"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

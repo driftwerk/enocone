@@ -24,4 +24,4 @@ tracing.workspace = true
 uuid.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 getrandom = "0.4.3"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
