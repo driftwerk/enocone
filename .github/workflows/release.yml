@@ -34,7 +34,7 @@ jobs:
           # Older Ubuntu so the binary's glibc also runs on newer ones.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: aarch64-apple-darwin, os: macos-15 }
     runs-on: ${{ matrix.os }}
     env:
       # Where the build assembles the Playwright driver, so it can be packed.
