@@ -13,6 +13,18 @@ use base64::Engine as _;
 use enocone_spec::RunResults;
 use serde_json::{Value, json};
 
+/// Open a URL in the default browser.
+pub fn open_url(u: &str) {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(cmd).arg(u).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+}
+
 pub const DEFAULT_HUB: &str = "https://enoc.one";
 
 pub fn normalise_url(u: &str) -> String {
@@ -151,6 +163,20 @@ async fn error_text(res: reqwest::Response) -> String {
     format!("{status}: {msg}")
 }
 
+/// The open review comments on a flow (all of them with `all`).
+pub async fn comments(url: &str, token: &str, project: &str, flow_id: &str, all: bool) -> anyhow::Result<Value> {
+    let res = client()
+        .get(format!("{url}/api/projects/{}/flows/{}/comments{}", enocode(project), enocode(flow_id), if all { "?all=true" } else { "" }))
+        .bearer_auth(token)
+        .send()
+        .await
+        .with_context(|| format!("reaching {url}"))?;
+    if !res.status().is_success() {
+        bail!("{}", error_text(res).await);
+    }
+    Ok(res.json().await?)
+}
+
 pub async fn whoami(url: &str, token: &str) -> anyhow::Result<Value> {
     let res = client().get(format!("{url}/api/whoami")).bearer_auth(token).send().await.with_context(|| format!("couldn't reach {url}"))?;
     if !res.status().is_success() {
@@ -201,7 +227,7 @@ async fn browser_login(url: &str) -> anyhow::Result<String> {
     let host = hostname();
     let link = format!("{url}/cli/authorize?port={port}&state={state}&name={}", enocode(&host));
     eprintln!("Opening {url} to sign in. If no browser opens, visit:\n  {link}");
-    crate::open_url(&link);
+    open_url(&link);
     let token = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
         listener.set_nonblocking(false)?;
         loop {

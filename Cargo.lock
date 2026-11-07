@@ -577,7 +577,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "enocone-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -589,8 +589,6 @@ dependencies = [
  "enocone-mcp",
  "enocone-report",
  "enocone-spec",
- "getrandom 0.4.3",
- "keyring",
  "reqwest",
  "serde",
  "serde_json",
@@ -600,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-driver-playwright"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -613,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -633,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-fixture"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "jsonwebtoken",
@@ -645,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-hub"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -668,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -678,6 +676,8 @@ dependencies = [
  "enocone-fixture",
  "enocone-report",
  "enocone-spec",
+ "getrandom 0.4.3",
+ "keyring",
  "reqwest",
  "rmcp",
  "schemars",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-report"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-spec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pulldown-cmark",
  "regex",

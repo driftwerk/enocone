@@ -264,6 +264,46 @@ impl Session for PwSession {
 }
 
 /// Install the browser builds matching the bundled Playwright driver.
+/// Where the Playwright driver comes from, as `enocone doctor` reports it.
+static DRIVER_SOURCE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// The driver folder shipped beside the binary in release archives (and in
+/// the Homebrew keg): `<dir of the real executable>/playwright-driver`.
+pub fn bundled_driver_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // Homebrew links bin/enocone to the keg; follow it to where the driver is.
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let dir = exe.parent()?.join("playwright-driver");
+    dir.join("package").join("cli.js").is_file().then_some(dir)
+}
+
+/// Point Playwright at the driver beside the binary, unless the user chose one
+/// with `PLAYWRIGHT_DRIVER_PATH`. Call first thing in `main`, before any
+/// threads exist: it sets an environment variable.
+pub fn use_bundled_driver() {
+    if std::env::var_os("PLAYWRIGHT_DRIVER_PATH").is_some_and(|v| !v.is_empty()) {
+        let _ = DRIVER_SOURCE.set("PLAYWRIGHT_DRIVER_PATH");
+        return;
+    }
+    match bundled_driver_dir() {
+        Some(dir) => {
+            // SAFETY: called from main before the async runtime or any other thread starts.
+            unsafe { std::env::set_var("PLAYWRIGHT_DRIVER_PATH", &dir) };
+            let _ = DRIVER_SOURCE.set("bundled with enocone");
+        }
+        None => {
+            let _ = DRIVER_SOURCE.set("assembled when enocone was built, or the user cache");
+        }
+    }
+}
+
+/// Which driver Playwright will use: (where it came from, the CLI script it runs).
+pub fn driver_info() -> (String, Result<std::path::PathBuf, String>) {
+    let source = DRIVER_SOURCE.get().copied().unwrap_or("not resolved yet").to_string();
+    let path = playwright_rs::server::driver::get_driver_executable().map(|(_, cli)| cli).map_err(|e| e.to_string());
+    (source, path)
+}
+
 pub async fn install_browsers(names: &[String], with_deps: bool) -> anyhow::Result<()> {
     let sel: Vec<&str> = names.iter().map(String::as_str).collect();
     let sel = (!sel.is_empty()).then_some(sel.as_slice());

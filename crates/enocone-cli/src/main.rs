@@ -1,7 +1,7 @@
 #![allow(clippy::format_in_format_args)] // coloured summary line reads better inline
 //! `enocone`: business flow documents that run as end-to-end tests.
 
-mod hub;
+use enocone_mcp::hub;
 mod init;
 
 use std::io::IsTerminal;
@@ -77,8 +77,12 @@ enum Cmd {
     Mcp,
     /// Create enocone.toml, an example flow and agent config in this directory.
     Init {
+        /// The project's name, also its short name on the team site.
         #[arg(long, default_value = "my-app")]
         name: String,
+        /// Connect to a team site: adds [hub] to enocone.toml and a GitHub workflow that publishes runs.
+        #[arg(long, value_name = "URL")]
+        hub: Option<String>,
     },
     /// Run the team site where flow documents, runs and review comments are shared.
     Serve(ServeArgs),
@@ -107,6 +111,8 @@ enum Cmd {
         #[arg(long = "to")]
         to: Option<String>,
     },
+    /// Check this installation: version, the Playwright driver, browsers, the project.
+    Doctor,
     /// Install the browsers matching the bundled Playwright version.
     InstallBrowsers {
         /// chromium, firefox, webkit (default: chromium)
@@ -364,17 +370,6 @@ fn open_path(p: &std::path::Path) {
     let _ = std::process::Command::new(cmd).arg(p).spawn();
 }
 
-fn open_url(u: &str) {
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    let _ = std::process::Command::new(cmd).arg(u).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-}
-
 fn load_project(cli: &Cli) -> anyhow::Result<Project> {
     let start = cli.project.clone().unwrap_or_else(|| PathBuf::from("."));
     let project = if start.is_file() { Project::load(&start)? } else { Project::discover(&start)? };
@@ -385,8 +380,14 @@ fn load_project(cli: &Cli) -> anyhow::Result<Project> {
     Ok(project)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Before any thread starts: it may set PLAYWRIGHT_DRIVER_PATH.
+    enocone_driver_playwright::use_bundled_driver();
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_env("ENOCONE_LOG")).with_writer(std::io::stderr).try_init();
     let cli = Cli::parse();
     let code = match real_main(cli).await {
@@ -402,9 +403,29 @@ async fn main() {
 async fn real_main(cli: Cli) -> anyhow::Result<i32> {
     let c = colors();
     match &cli.cmd {
-        Cmd::Init { name } => {
-            init::init(&std::env::current_dir()?, name)?;
+        Cmd::Init { name, hub } => {
+            let hub = hub.as_deref().map(|url| init::Hub { url: url.trim_end_matches('/'), project: name });
+            init::init(&std::env::current_dir()?, name, hub)?;
             Ok(0)
+        }
+        Cmd::Doctor => {
+            println!("enocone {}", env!("CARGO_PKG_VERSION"));
+            let (source, path) = enocone_driver_playwright::driver_info();
+            let ok = match &path {
+                Ok(p) => {
+                    println!("playwright driver: {source}\n  {}", p.display());
+                    true
+                }
+                Err(e) => {
+                    println!("playwright driver: not found ({source})\n  {e}");
+                    false
+                }
+            };
+            match load_project(&cli) {
+                Ok(p) => println!("project: {} ({})", p.config.project, p.root.display()),
+                Err(_) => println!("project: none here (enocone init creates one)"),
+            }
+            Ok(if ok { 0 } else { 1 })
         }
         Cmd::InstallBrowsers { browsers, with_deps } => {
             let list = if browsers.is_empty() { vec!["chromium".to_string()] } else { browsers.clone() };

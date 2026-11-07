@@ -29,10 +29,12 @@ See [`docs/architecture.md`](docs/architecture.md) for the design and
 ## Quick start
 
 ```bash
-cargo install --path crates/enocone-cli
+brew install driftwerk/tap/enocone  # macOS (Apple Silicon) and Linux; or: cargo install --path crates/enocone-cli
 enocone install-browsers            # Chromium for browser steps
+enocone doctor                      # checks the installation
 
 enocone init                        # enocone.toml, an example flow, .mcp.json
+enocone init --name shop --hub https://enoc.one   # also [hub] and a CI workflow that publishes there
 enocone validate
 enocone run --env local --open      # run and open the report
 enocone docs --open                 # the documents only, nothing runs
@@ -116,6 +118,10 @@ when it gets that old, so long suites keep working.
 
 - **Tools.** Explore with `browser_open`, `browser_act`, `http_request` and `describe_api`. Write with `validate_flow`, `dry_run_flow` and `write_flow`. Run and investigate with `run_flows` and `get_failures`.
 - **Prompts.** One per stage of the lifecycle: `design_feature_flows`, `backfill_flows`, `implement_flow` and `triage_failures`.
+- **The team site.** With `[hub]` in `enocone.toml`: `hub_status`, `publish_run` (so people can review a draft) and `review_comments` (what they said about it). The AI uses your `enocone login`; it never handles a password.
+
+To use enocone in every project with Claude Code, not just where `.mcp.json` is:
+`claude mcp add enocone --scope user -- enocone mcp`.
 
 ## Secrets
 

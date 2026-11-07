@@ -144,6 +144,7 @@ impl App {
             .route("/cli/authorize", get(cli_authorize_page).post(cli_authorize))
             .route("/tokens/{id}/revoke", post(runs::revoke_token))
             .route("/api/whoami", get(runs::whoami))
+            .route("/api/projects/{slug}/flows/{flow_id}/comments", get(review::api_comments))
             .route("/api/projects/{slug}/runs", post(runs::publish).get(runs::list_runs).layer(DefaultBodyLimit::max(runs::MAX_UPLOAD)))
             .route("/{slug}", get(project_page))
             .route("/{slug}/members", get(members_page).post(members_add))
@@ -321,7 +322,7 @@ async fn login_page(State(app): State<App>, h: HeaderMap, Query(q): Query<NextQ>
         return Ok(Redirect::to(&safe_next(q.next.as_deref())).into_response());
     }
     let github = app.cfg.github_client_id.is_some() && app.cfg.github_client_secret.is_some();
-    Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, &safe_next(q.next.as_deref()), q.error.as_deref())))
+    Ok(html(pages::home(&app.cfg.site(), &app.cfg.origin(), github, app.cfg.run_retention_days, &safe_next(q.next.as_deref()), q.error.as_deref())))
 }
 
 #[derive(Deserialize)]
@@ -517,7 +518,7 @@ async fn cli_authorize(State(app): State<App>, h: HeaderMap, Form(q): Form<CliAu
 async fn home(State(app): State<App>, h: HeaderMap) -> R {
     let Some(user) = current_user(&app, &h)? else {
         let github = app.cfg.github_client_id.is_some() && app.cfg.github_client_secret.is_some();
-        return Ok(html(pages::home(&app.cfg.site(), github, app.cfg.run_retention_days, "/", None)));
+        return Ok(html(pages::home(&app.cfg.site(), &app.cfg.origin(), github, app.cfg.run_retention_days, "/", None)));
     };
     let projects = visible_projects(&app, &user)?;
     let owner = app.cfg.is_owner(&user);

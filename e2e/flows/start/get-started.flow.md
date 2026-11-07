@@ -15,7 +15,7 @@ connect, ask your AI tool for flows.
 ## Rules
 
 - Three steps, each with the command to copy: `brew install
-  driftwerk/tap/enocone`, `enocone init --hub <this site> --project <name>`,
+  driftwerk/tap/enocone`, `enocone init --name <project> --hub <this site>`,
   and an example request for the AI tool ("Design flows for the checkout
   feature").
 - The site's own address goes into the second command, so self-hosted

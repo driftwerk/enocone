@@ -15,7 +15,7 @@ CI runs the flows on every push.
 
 ```flowchart
 flowchart LR
-  1[A repository without enocone] --> 2[enocone init --hub https://enoc.one --project shop] --> 3[enocone.toml, .mcp.json, CI workflow]
+  1[A repository without enocone] --> 2[enocone init --name shop --hub https://enoc.one] --> 3[enocone.toml, .mcp.json, CI workflow]
   3 --> 4[Next steps: sign in, create shop on the site, open the AI tool]
   2 -.->|run again| 5[Nothing overwritten]
 ```
@@ -24,7 +24,7 @@ flowchart LR
 
 - `enocone init` without `--hub` behaves as today: `enocone.toml`, an
   example flow, `.mcp.json` and `.enocone.env.example`.
-- With `--hub URL --project SLUG`, it also writes the `[hub]` section and a
+- With `--hub URL`, it also writes the `[hub]` section and a
   GitHub Actions workflow that runs the flows and publishes them with
   GitHub's token (no stored secret).
 - The workflow uses `driftwerk/enocone@v0`, so projects get fixes without
@@ -50,7 +50,7 @@ flowchart LR
 
 ## When
 
-2. **She runs enocone init --hub https://enoc.one --project shop**
+2. **She runs enocone init --name shop --hub https://enoc.one**
 
 ## Then
 

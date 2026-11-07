@@ -11,6 +11,7 @@
         <a href="#how" style="color:#C9C4E6;text-decoration:none">How it works</a>
         <a href="#review" style="color:#C9C4E6;text-decoration:none">Review</a>
         <a href="#run" style="color:#C9C4E6;text-decoration:none">Run and publish</a>
+        <a href="#start" style="color:#C9C4E6;text-decoration:none">Get started</a>
         <a href="#self-host" style="color:#C9C4E6;text-decoration:none">Self-host</a>
         <a href="#signin" class="h-btn" style="min-height:38px;padding:0 14px;background:rgba(255,255,255,.08);border:1px solid rgba(185,172,255,.4);color:#fff">Sign in</a>
       </nav>
@@ -196,6 +197,41 @@ published 13 flows and 26 screenshots
   </section>
 
   <!-- ============ Self-host + final CTA ============ -->
+  <!-- ============ Get started ============ -->
+  <section id="start" class="h-sec" style="background:#F3F1EC">
+    <div class="h-wrap" style="display:flex;flex-direction:column;gap:32px">
+      <div style="display:flex;flex-direction:column;gap:12px;max-width:780px">
+        <div class="kicker">Get started</div>
+        <h2 class="serif" style="font-size:42px;line-height:1.08">Three steps, <em style="font-style:italic;font-weight:400;color:#5B3DF0">then ask your AI tool</em></h2>
+        <p class="lede">enocone's MCP server teaches Claude Code, Cursor or any MCP client the flow format, lets it explore your app, and run and publish what it writes.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px">
+        <div class="h-card" style="padding:24px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;border-radius:50%;background:#EEEAFF;color:#5B3DF0;display:flex;align-items:center;justify-content:center;font-weight:700">1</span><b class="serif" style="font-size:20px">Install</b></div>
+          <span style="font-size:14.5px;line-height:1.5;color:#2A3550">On macOS or Linux, with Homebrew. Then download Chromium for browser steps.</span>
+          <pre class="h-term" style="margin-top:auto"><span class="p">$</span> brew tap driftwerk/tap
+<span class="p">$</span> brew install enocone
+<span class="p">$</span> enocone install-browsers</pre>
+        </div>
+        <div class="h-card" style="padding:24px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;border-radius:50%;background:#EEEAFF;color:#5B3DF0;display:flex;align-items:center;justify-content:center;font-weight:700">2</span><b class="serif" style="font-size:20px">Connect your project</b></div>
+          <span style="font-size:14.5px;line-height:1.5;color:#2A3550">In your repository: enocone.toml, a CI workflow that publishes here, and .mcp.json for your AI tool.</span>
+          <pre class="h-term" style="margin-top:auto"><span class="p">$</span> enocone init --name shop \
+    --hub {{ORIGIN}}
+<span class="p">$</span> enocone login</pre>
+        </div>
+        <div class="h-card" style="padding:24px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px"><span style="width:34px;height:34px;border-radius:50%;background:#EEEAFF;color:#5B3DF0;display:flex;align-items:center;justify-content:center;font-weight:700">3</span><b class="serif" style="font-size:20px">Ask for flows</b></div>
+          <span style="font-size:14.5px;line-height:1.5;color:#2A3550">Open your AI tool in the project. It drafts flows for people to review here, then implements them once approved.</span>
+          <pre class="h-term" style="margin-top:auto"><span class="c"># in Claude Code or Cursor</span>
+<span class="s">"Design flows for the checkout
+ feature, with mockups"</span></pre>
+        </div>
+      </div>
+      <p style="margin:0;font-size:14px;color:#5F6678">The full guide: <a href="https://github.com/driftwerk/enocone#readme">enocone on GitHub</a>. Create the project here and link it to your GitHub repository so CI publishes without a secret.</p>
+    </div>
+  </section>
+
   <section id="self-host" class="cover" style="padding:88px 0">
     <div class="h-wrap h-two">
       <div style="display:flex;flex-direction:column;gap:18px">

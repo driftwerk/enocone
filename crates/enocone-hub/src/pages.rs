@@ -49,7 +49,7 @@ fn brand(site: &str) -> String {
 }
 
 /// The home page for signed-out visitors: what enocone is, with the sign-in card.
-pub fn home(site: &str, github: bool, retention_days: u32, next: &str, error: Option<&str>) -> String {
+pub fn home(site: &str, origin: &str, github: bool, retention_days: u32, next: &str, error: Option<&str>) -> String {
     let gh_href = format!("/auth/github?next={}", esc(&urlenc(next)));
     let gh_block = if github {
         format!(
@@ -63,6 +63,7 @@ pub fn home(site: &str, github: bool, retention_days: u32, next: &str, error: Op
     let err = error.map(|e| format!(r#"<div class="notice fail" role="alert">{}</div>"#, esc(e))).unwrap_or_default();
     let body = include_str!("../assets/home.html")
         .replace("{{SITE}}", &esc(site))
+        .replace("{{ORIGIN}}", &esc(origin))
         .replace("{{GITHUB_BLOCK}}", &gh_block)
         .replace("{{GITHUB_CTA}}", &gh_cta)
         .replace("{{NEXT}}", &esc(next))

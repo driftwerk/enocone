@@ -35,7 +35,7 @@ fn run_dir(app: &App, project_id: i64, run: i64) -> PathBuf {
 // ------------------------------------------------------------------ API auth
 
 /// The person behind a publish token (`Authorization: Bearer enc_…`).
-fn token_user(app: &App, h: &HeaderMap) -> anyhow::Result<Option<User>> {
+pub(crate) fn token_user(app: &App, h: &HeaderMap) -> anyhow::Result<Option<User>> {
     let Some(tok) = auth::bearer(h) else { return Ok(None) };
     app.db.with(|c| {
         let uid: Option<i64> = c.query_row("SELECT user_id FROM tokens WHERE token_hash = ?1", [auth::hash(&tok)], |r| r.get(0)).optional()?;
@@ -45,7 +45,7 @@ fn token_user(app: &App, h: &HeaderMap) -> anyhow::Result<Option<User>> {
     })
 }
 
-fn api_error(status: StatusCode, msg: &str) -> Response {
+pub(crate) fn api_error(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 

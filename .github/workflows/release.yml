@@ -1,7 +1,9 @@
 name: release
-# Tag a version (git tag v0.2.0 && git push --tags) to build the Linux binary
-# that `enocone serve` deployments install. The archive holds `enocone` at
-# its root; the .sha256 file beside it is what deployments check.
+# Tag a version (git tag v0.2.0 && git push origin v0.2.0) whose number matches
+# Cargo.toml. Each archive holds `enocone` and the Playwright driver it uses
+# (`playwright-driver/`) side by side; the .sha256 beside it is what
+# deployments and the Homebrew formula check. The tap's formula is then
+# updated to the new version.
 on:
   push:
     # Versions only; the moving v0 tag (what `uses: driftwerk/enocone@v0` follows) is not a release.
@@ -11,25 +13,86 @@ permissions:
   contents: write
 
 jobs:
-  linux-x86_64:
-    # Built on an older Ubuntu so the binary's glibc also runs on newer ones.
-    runs-on: ubuntu-22.04
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the crate version
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$crate" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml ($crate). Bump Cargo.toml first."
+            exit 1
+          fi
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Older Ubuntu so the binary's glibc also runs on newer ones.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-14 }
+    runs-on: ${{ matrix.os }}
+    env:
+      # Where the build assembles the Playwright driver, so it can be packed.
+      PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/.pw-driver
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # No build cache here: a restored build skips assembling the driver.
       - name: Build
         run: cargo build --release --locked -p enocone-cli
       - name: Package
+        shell: bash
         run: |
-          name=enocone-x86_64-unknown-linux-gnu.tar.gz
-          tar -czf "$name" -C target/release enocone
-          sha256sum "$name" | cut -d' ' -f1 > "$name.sha256"
-          ./target/release/enocone --version
+          cli=$(find "$PLAYWRIGHT_DRIVER_CACHE_DIR" -path '*/package/cli.js' | head -1)
+          [ -n "$cli" ] || { echo "::error::The build didn't assemble a Playwright driver"; exit 1; }
+          mkdir -p pkg && cp target/release/enocone pkg/
+          cp -R "$(dirname "$(dirname "$cli")")" pkg/playwright-driver
+          rm -rf "$PLAYWRIGHT_DRIVER_CACHE_DIR"   # so the smoke test can only find the bundled one
+          ./pkg/enocone --version
+          ./pkg/enocone doctor | tee doctor.txt
+          grep -q "bundled with enocone" doctor.txt
+          name=enocone-${{ matrix.target }}.tar.gz
+          tar -czf "$name" -C pkg enocone playwright-driver
+          if command -v sha256sum >/dev/null; then sha256sum "$name"; else shasum -a 256 "$name"; fi | cut -d' ' -f1 > "$name.sha256"
           cat "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enocone-${{ matrix.target }}
+          path: enocone-${{ matrix.target }}.tar.gz*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
+      - name: Update the Homebrew formula
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
-            enocone-x86_64-unknown-linux-gnu.tar.gz enocone-x86_64-unknown-linux-gnu.tar.gz.sha256
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY isn't set; the formula wasn't updated."
+            exit 0
+          fi
+          mkdir -p ~/.ssh && printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone -q git@github.com:driftwerk/homebrew-tap.git tap
+          sh .github/scripts/homebrew-formula.sh "${GITHUB_REF_NAME#v}" dist > tap/Formula/enocone.rb
+          cd tap
+          git config user.name "enocone release"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/enocone.rb
+          if git commit -qm "enocone ${GITHUB_REF_NAME#v}"; then git push -q origin HEAD; else echo "formula unchanged"; fi
+          rm -f ~/.ssh/tap

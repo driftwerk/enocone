@@ -5,6 +5,7 @@
 //! blocks, so what the agent tries is exactly what it will write.
 
 pub mod app;
+pub mod hub;
 pub mod prototype;
 mod tools;
 
