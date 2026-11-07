@@ -20,6 +20,11 @@ FIXTURES = "fixtures"
 WEB = "http://127.0.0.1:4010"
 API = "http://127.0.0.1:4010/api"
 
+# Runs are published to enoc.one from CI (`enocone publish`; GitHub OIDC, no secret).
+[hub]
+url = "https://enoc.one"
+project = "enocone"
+
 # Sign-in emails from `enocone serve` go to the fixture's Postmark stand-in.
 [email]
 provider = "postmark"

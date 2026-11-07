@@ -48,6 +48,9 @@ jobs:
   # enocone's own specification: the flows in e2e/ run the freshly built binary.
   e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # so the run can be published to enoc.one without a secret
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,6 +71,16 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4010/login >/dev/null && break; sleep 1; done
       - name: Run the e2e flows
         run: ./target/debug/enocone --project e2e run --single-file
+      - name: Publish to enoc.one
+        # Pushes and pull requests from this repository; forks get no OIDC token.
+        if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          if url=$(./target/debug/enocone --project e2e publish); then
+            echo "::notice title=enoc.one::Published $url"
+            echo "Published to [$url]($url)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=enoc.one::Publishing failed; the report is in the e2e-report artifact."
+          fi
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
