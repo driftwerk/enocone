@@ -12,7 +12,7 @@ if [ -f "$pidf" ]; then kill "$(cat "$pidf")" 2>/dev/null || true; sleep 0.2; fi
 mkdir -p "$data"
 ENOCONE_DATA="$data" ENOCONE_LISTEN="127.0.0.1:$port" ENOCONE_PUBLIC_URL="http://127.0.0.1:$port" \
 ENOCONE_OWNER_EMAIL="$OWNER" ENOCONE_POSTMARK_URL="$WEB/postmark" ENOCONE_POSTMARK_TOKEN=fixture-postmark-token \
-ENOCONE_GITHUB_CLIENT_ID= ENOCONE_GITHUB_CLIENT_SECRET= \
+ENOCONE_GITHUB_CLIENT_ID= ENOCONE_GITHUB_CLIENT_SECRET= ENOCONE_OIDC_ISSUER="$WEB/oidc" \
   "$BIN" serve >>"$data/serve.log" 2>&1 &
 pid=$!
 echo "$pid" > "$pidf"

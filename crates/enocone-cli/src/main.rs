@@ -1,6 +1,7 @@
 #![allow(clippy::format_in_format_args)] // coloured summary line reads better inline
 //! `enocone`: business flow documents that run as end-to-end tests.
 
+mod hub;
 mod init;
 
 use std::io::IsTerminal;
@@ -81,6 +82,31 @@ enum Cmd {
     },
     /// Run the team site where flow documents, runs and review comments are shared.
     Serve(ServeArgs),
+    /// Sign in to a team site (enoc.one by default) so `enocone publish` can send runs.
+    Login {
+        /// The site (default: [hub] url in enocone.toml, or https://enoc.one).
+        #[arg(long)]
+        url: Option<String>,
+        /// Read a publish token from stdin instead of opening a browser.
+        #[arg(long)]
+        with_token: bool,
+    },
+    /// Forget the token `enocone login` saved on this computer.
+    Logout {
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Send the latest run (results and screenshots) to the team site.
+    Publish {
+        /// results.json to send (default: enocone-report/results.json in the project).
+        results: Option<PathBuf>,
+        /// The site (default: [hub] url in enocone.toml, or https://enoc.one).
+        #[arg(long)]
+        url: Option<String>,
+        /// The project on the site (default: [hub] project in enocone.toml).
+        #[arg(long = "to")]
+        to: Option<String>,
+    },
     /// Install the browsers matching the bundled Playwright version.
     InstallBrowsers {
         /// chromium, firefox, webkit (default: chromium)
@@ -169,6 +195,9 @@ struct ServeArgs {
     /// The From address of sign-in emails (default: noreply@ the site's host).
     #[arg(long, env = "ENOCONE_MAIL_FROM")]
     mail_from: Option<String>,
+    /// Who signs CI tokens (default: GitHub Actions).
+    #[arg(long, env = "ENOCONE_OIDC_ISSUER", default_value = enocone_hub::GITHUB_ISSUER, hide = true)]
+    oidc_issuer: String,
     /// Days runs are kept (flow documents and comments are kept).
     #[arg(long, env = "ENOCONE_RUN_RETENTION_DAYS", default_value_t = 30)]
     run_retention_days: u32,
@@ -178,6 +207,21 @@ struct ServeArgs {
     /// Print a new publish token for this address and exit (e.g. for a CI secret).
     #[arg(long, value_name = "EMAIL")]
     new_token: Option<String>,
+    /// Delete expired runs now and exit.
+    #[arg(long)]
+    sweep: bool,
+    /// Testing: sweep as if the clock were this many days ahead.
+    #[arg(long, hide = true, default_value_t = 0, requires = "sweep")]
+    clock_offset_days: i64,
+}
+
+/// The team site: --url, else [hub] url in enocone.toml, else enoc.one.
+fn hub_url(cli: &Cli, flag: Option<&str>) -> String {
+    if let Some(u) = flag {
+        return hub::normalise_url(u);
+    }
+    let from_project = load_project(cli).ok().and_then(|p| p.config.hub).map(|h| h.url);
+    hub::normalise_url(from_project.as_deref().unwrap_or(hub::DEFAULT_HUB))
 }
 
 fn non_empty(v: &Option<String>) -> Option<String> {
@@ -197,6 +241,7 @@ async fn serve(a: &ServeArgs) -> anyhow::Result<i32> {
         postmark_url: a.postmark_url.clone(),
         mail_from: non_empty(&a.mail_from).unwrap_or_else(|| format!("noreply@{host}")),
         run_retention_days: a.run_retention_days,
+        oidc_issuer: a.oidc_issuer.clone(),
     };
     if let Some(email) = &a.sign_in_link {
         println!("{}", enocone_hub::App::new(cfg)?.sign_in_link(email)?);
@@ -204,6 +249,11 @@ async fn serve(a: &ServeArgs) -> anyhow::Result<i32> {
     }
     if let Some(email) = &a.new_token {
         println!("{}", enocone_hub::App::new(cfg)?.create_token(email, "created by enocone serve --new-token")?);
+        return Ok(0);
+    }
+    if a.sweep {
+        let n = enocone_hub::App::new(cfg)?.sweep_now(a.clock_offset_days)?;
+        println!("deleted {n} expired run{}", if n == 1 { "" } else { "s" });
         return Ok(0);
     }
     enocone_hub::serve(cfg).await?;
@@ -304,6 +354,17 @@ fn open_path(p: &std::path::Path) {
     let _ = std::process::Command::new(cmd).arg(p).spawn();
 }
 
+fn open_url(u: &str) {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(cmd).arg(u).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+}
+
 fn load_project(cli: &Cli) -> anyhow::Result<Project> {
     let start = cli.project.clone().unwrap_or_else(|| PathBuf::from("."));
     let project = if start.is_file() { Project::load(&start)? } else { Project::discover(&start)? };
@@ -342,6 +403,29 @@ async fn real_main(cli: Cli) -> anyhow::Result<i32> {
             Ok(0)
         }
         Cmd::Serve(a) => serve(a).await,
+        Cmd::Login { url, with_token } => {
+            hub::login(&hub_url(&cli, url.as_deref()), *with_token).await?;
+            Ok(0)
+        }
+        Cmd::Logout { url } => {
+            hub::logout(&hub_url(&cli, url.as_deref()))?;
+            Ok(0)
+        }
+        Cmd::Publish { results, url, to } => {
+            let project = load_project(&cli).ok();
+            let hub_cfg = project.as_ref().and_then(|p| p.config.hub.clone());
+            let url = hub_url(&cli, url.as_deref());
+            let Some(slug) = to.clone().or_else(|| hub_cfg.map(|h| h.project)) else {
+                anyhow::bail!("which project? Add [hub] project = \"…\" to enocone.toml, or pass --to");
+            };
+            let path = match (results, &project) {
+                (Some(r), _) => r.clone(),
+                (None, Some(p)) => p.root.join("enocone-report").join("results.json"),
+                (None, None) => PathBuf::from("enocone-report/results.json"),
+            };
+            println!("{}", hub::publish(&url, &slug, &path).await?);
+            Ok(0)
+        }
         Cmd::Mcp => {
             // Load the project (and .enocone.env secrets) once, up front.
             let project = load_project(&cli)?;

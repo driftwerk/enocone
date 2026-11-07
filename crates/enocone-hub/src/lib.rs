@@ -8,6 +8,7 @@
 mod auth;
 mod db;
 mod mail;
+mod oidc;
 mod pages;
 mod runs;
 
@@ -44,7 +45,11 @@ pub struct Config {
     pub postmark_url: String,
     pub mail_from: String,
     pub run_retention_days: u32,
+    /// Who signs CI tokens (GitHub Actions; overridable for tests).
+    pub oidc_issuer: String,
 }
+
+pub use oidc::GITHUB_ISSUER;
 
 impl Config {
     fn origin(&self) -> String {
@@ -75,6 +80,7 @@ pub struct App {
     db: Db,
     mailer: mail::Mailer,
     limits: Arc<(Limiter, Limiter)>,
+    oidc: Arc<oidc::Verifier>,
 }
 
 impl App {
@@ -85,7 +91,8 @@ impl App {
         let mailer = mail::Mailer::new(cfg.postmark_url.clone(), cfg.postmark_token.clone(), cfg.mail_from.clone());
         // Sign-in links: 3 per address and 10 per IP in 15 minutes.
         let limits = Arc::new((Limiter::new(3, Duration::from_secs(900)), Limiter::new(10, Duration::from_secs(900))));
-        Ok(App { cfg: Arc::new(cfg), db, mailer, limits })
+        let oidc = Arc::new(oidc::Verifier::new(cfg.oidc_issuer.clone()));
+        Ok(App { cfg: Arc::new(cfg), db, mailer, limits, oidc })
     }
 
     /// A one-time sign-in link for `email`, for the first sign-in on a server with no mail set up.
@@ -108,6 +115,11 @@ impl App {
         Ok(token)
     }
 
+    /// Delete expired runs now, as if the clock were `offset_days` ahead (0 in real use).
+    pub fn sweep_now(&self, offset_days: i64) -> anyhow::Result<usize> {
+        runs::sweep(self, db::epoch() + offset_days * 86400)
+    }
+
     pub fn router(self) -> Router {
         Router::new()
             .route("/healthz", get(|| async { "ok" }))
@@ -121,14 +133,17 @@ impl App {
             .route("/", get(home))
             .route("/projects", post(create_project))
             .route("/tokens", post(runs::new_token))
+            .route("/cli/authorize", get(cli_authorize_page).post(cli_authorize))
             .route("/tokens/{id}/revoke", post(runs::revoke_token))
             .route("/api/whoami", get(runs::whoami))
-            .route("/api/projects/{slug}/runs", post(runs::publish).layer(DefaultBodyLimit::max(runs::MAX_UPLOAD)))
+            .route("/api/projects/{slug}/runs", post(runs::publish).get(runs::list_runs).layer(DefaultBodyLimit::max(runs::MAX_UPLOAD)))
             .route("/{slug}", get(project_page))
             .route("/{slug}/members", get(members_page).post(members_add))
             .route("/{slug}/members/remove", post(members_remove))
             .route("/{slug}/publish", get(runs::publish_page))
             .route("/{slug}/review", get(runs::review_page))
+            .route("/{slug}/flows", get(runs::flows_redirect))
+            .route("/{slug}/flows/", get(runs::flows_page))
             .route("/{slug}/runs/{run}", get(runs::run_redirect))
             .route("/{slug}/runs/{run}/", get(runs::run_page))
             .route("/{slug}/runs/{run}/assets/{*path}", get(runs::run_asset))
@@ -144,7 +159,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let sweeper = app.clone();
     tokio::spawn(async move {
         loop {
-            if let Err(e) = runs::sweep(&sweeper) {
+            if let Err(e) = runs::sweep(&sweeper, db::epoch()) {
                 tracing::warn!("retention sweep failed: {e:#}");
             }
             tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -423,6 +438,60 @@ async fn logout(State(app): State<App>, h: HeaderMap) -> R {
     let mut res = Redirect::to("/login").into_response();
     res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&auth::clear_cookie(app.cfg.secure()))?);
     Ok(res)
+}
+
+// ------------------------------------------------------------------ enocone login
+
+#[derive(Deserialize)]
+struct CliAuth {
+    port: u16,
+    state: String,
+    name: Option<String>,
+}
+
+fn cli_auth_valid(q: &CliAuth) -> bool {
+    q.port >= 1024 && !q.state.is_empty() && q.state.len() <= 128 && q.state.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// `enocone login` opens this page; allowing it hands a new token to the CLI on a local port.
+async fn cli_authorize_page(State(app): State<App>, h: HeaderMap, Query(q): Query<CliAuth>) -> R {
+    let here = format!("/cli/authorize?port={}&state={}&name={}", q.port, q.state, pages::urlenc(q.name.as_deref().unwrap_or("")));
+    let user = require_user(&app, &h, &here)?;
+    if !cli_auth_valid(&q) {
+        return Err(Fail::Bad("This sign-in link from enocone login is incomplete. Run enocone login again.".into()));
+    }
+    let name = q.name.clone().unwrap_or_else(|| "enocone login".into());
+    let body = format!(
+        r#"<div class="cover gate"><main class="card">
+  <div class="kicker">enocone login</div>
+  <h1 class="serif" style="font-size:30px;line-height:1.1">Let enocone on <em style="color:var(--iris)">{name}</em> publish runs as you?</h1>
+  <p class="lede" style="font-size:17px">Signed in as {who}. The token can publish to projects where you are a member or owner, and can be revoked on any project's Publishing page.</p>
+  <form method="post" action="/cli/authorize"><input type="hidden" name="port" value="{port}"><input type="hidden" name="state" value="{state}"><input type="hidden" name="name" value="{name}"><button class="btn iris wide" type="submit">Allow</button></form>
+  <a class="btn ghost" href="/">Cancel</a>
+</main></div>"#,
+        name = esc(&name),
+        who = esc(&user.label()),
+        port = q.port,
+        state = esc(&q.state)
+    );
+    let mut res = html(pages::doc(&format!("enocone login · {}", app.cfg.site()), &body));
+    res.headers_mut().insert(
+        "content-security-policy",
+        HeaderValue::from_static("default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; form-action 'self' http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'"),
+    );
+    Ok(res)
+}
+
+async fn cli_authorize(State(app): State<App>, h: HeaderMap, Form(q): Form<CliAuth>) -> R {
+    same_origin(&app, &h)?;
+    let user = require_user(&app, &h, "/")?;
+    if !cli_auth_valid(&q) {
+        return Err(Fail::Bad("This sign-in link from enocone login is incomplete. Run enocone login again.".into()));
+    }
+    let name: String = q.name.as_deref().unwrap_or("enocone login").chars().take(60).collect();
+    let token = format!("enc_{}", auth::random_token());
+    app.db.with(|c| c.execute("INSERT INTO tokens (user_id, name, token_hash, created_at) VALUES (?1, ?2, ?3, ?4)", params![user.id, name, auth::hash(&token), db::now()]))?;
+    Ok(Redirect::to(&format!("http://127.0.0.1:{}/callback?state={}&token={token}", q.port, q.state)).into_response())
 }
 
 // ------------------------------------------------------------------ projects

@@ -25,6 +25,8 @@ use crate::{App, Fail, R, auth, project_for, require_user, same_origin, visible_
 /// The largest publish accepted: results plus screenshots, base64-encoded.
 pub const MAX_UPLOAD: usize = 80 * 1024 * 1024;
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+/// The most screenshot data one run may carry.
+pub const MAX_SCREENSHOTS: usize = 50 * 1024 * 1024;
 
 fn run_dir(app: &App, project_id: i64, run: i64) -> PathBuf {
     app.cfg.data.join("runs").join(project_id.to_string()).join(run.to_string())
@@ -73,7 +75,47 @@ pub fn safe_asset_path(p: &str) -> bool {
         && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
 }
 
+fn looks_like_jwt(t: &str) -> bool {
+    !t.starts_with("enc_") && t.split('.').count() == 3
+}
+
+/// A run from GitHub Actions, vouched for by GitHub's OIDC token.
+async fn publish_from_ci(app: &App, jwt: &str, slug: &str, body: Result<Json<PublishBody>, axum::extract::rejection::JsonRejection>) -> R {
+    let claims = match app.oidc.verify(jwt, &app.cfg.origin()).await {
+        Ok(c) => c,
+        Err(why) => return Ok(api_error(StatusCode::UNAUTHORIZED, &format!("GitHub's token wasn't accepted: {why}"))),
+    };
+    if claims.event_name == "pull_request_target" {
+        return Ok(api_error(StatusCode::FORBIDDEN, "Workflows triggered by pull_request_target can't publish: they may be running a fork's code."));
+    }
+    let repo = claims.repository.to_lowercase();
+    let project = app.db.with(|c| db::project_by_slug(c, slug))?.filter(|p| p.repo.as_deref() == Some(repo.as_str()));
+    let Some(project) = project else {
+        return Ok(api_error(StatusCode::FORBIDDEN, &format!("A workflow in {repo} can't publish to {slug}: the project isn't linked to that repository.")));
+    };
+    let Json(body) = match body {
+        Ok(b) => b,
+        Err(e) => return Ok(api_error(StatusCode::BAD_REQUEST, &format!("The upload isn't valid JSON: {e}"))),
+    };
+    let by = if claims.actor.is_empty() { "GitHub Actions".to_string() } else { format!("{} via GitHub Actions", claims.actor) };
+    store_run(app, &project, &by, "ci", body.results, body.files)
+}
+
+/// Runs of a project, newest first (for tokens of its members).
+pub async fn list_runs(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
+    let Some(user) = token_user(&app, &h)? else { return Ok(api_error(StatusCode::UNAUTHORIZED, "Sign in with `enocone login`, or set ENOCONE_HUB_TOKEN.")) };
+    let Ok((project, _)) = project_for(&app, &user, &slug) else { return Ok(api_error(StatusCode::NOT_FOUND, "No such project, or you are not a member of it.")) };
+    let runs: Vec<Value> = runs_of(&app, &project, 100)?
+        .into_iter()
+        .map(|r| json!({ "id": r.id, "url": format!("{}/{}/runs/{}/", app.cfg.origin(), project.slug, r.id), "source": r.source, "published_by": r.by, "branch": r.branch, "executed": r.executed, "prototype": r.prototype, "summary": r.summary, "created_at": r.created_at }))
+        .collect();
+    Ok(Json(json!({ "runs": runs })).into_response())
+}
+
 pub async fn publish(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>, body: Result<Json<PublishBody>, axum::extract::rejection::JsonRejection>) -> R {
+    if let Some(t) = auth::bearer(&h).filter(|t| looks_like_jwt(t)) {
+        return publish_from_ci(&app, &t, &slug, body).await;
+    }
     let Some(user) = token_user(&app, &h)? else { return Ok(api_error(StatusCode::UNAUTHORIZED, "Sign in with `enocone login`, or set ENOCONE_HUB_TOKEN.")) };
     let project = match project_for(&app, &user, &slug) {
         Ok((p, r)) if r >= Role::Member => p,
@@ -113,6 +155,9 @@ pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, re
         }
         pngs.push((path, bytes));
     }
+    if pngs.iter().map(|(_, b)| b.len()).sum::<usize>() > MAX_SCREENSHOTS {
+        return Ok(api_error(StatusCode::PAYLOAD_TOO_LARGE, "A run may carry at most 50 MB of screenshots; take fewer (screenshots = \"on-failure\")."));
+    }
     // Screenshots the results point at must be among the files, or are dropped.
     let mut data = parsed;
     let have: std::collections::HashSet<&str> = pngs.iter().map(|(p, _)| p.as_str()).collect();
@@ -139,7 +184,18 @@ pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, re
             "INSERT INTO runs (project_id, run_id, executed, prototype, source, published_by, branch, commit_sha, summary, flows, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![project.id, data.run.id, data.run.executed, data.run.prototype, source, by, data.run.git_branch, data.run.git_commit, summary, serde_json::to_string(&flows).unwrap(), db::epoch()],
         )?;
-        Ok(c.last_insert_rowid())
+        let run_id = c.last_insert_rowid();
+        for f in &data.flows {
+            let doc = serde_json::to_string(&f.flow).unwrap_or_default();
+            c.execute(
+                "INSERT INTO flows (project_id, flow_id, title, area, stage, doc, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (project_id, flow_id) DO UPDATE SET title = excluded.title, area = excluded.area, stage = excluded.stage, doc = excluded.doc, updated_at = excluded.updated_at",
+                params![project.id, f.flow.id, f.flow.title, f.flow.meta.area, stage_str(f), doc, db::epoch()],
+            )?;
+        }
+        if data.theme.is_some() {
+            c.execute("UPDATE projects SET theme = ?1 WHERE id = ?2", params![data.theme, project.id])?;
+        }
+        Ok(run_id)
     })?;
     let dir = run_dir(app, project.id, run_id);
     let written = (|| -> anyhow::Result<()> {
@@ -187,8 +243,8 @@ fn first_error(f: &enocone_spec::results::FlowResult) -> Option<String> {
 // ------------------------------------------------------------------ retention
 
 /// Delete runs older than the retention period. Flow documents live in git and comments are kept.
-pub fn sweep(app: &App) -> anyhow::Result<usize> {
-    let cutoff = db::epoch() - i64::from(app.cfg.run_retention_days) * 86400;
+pub fn sweep(app: &App, now: i64) -> anyhow::Result<usize> {
+    let cutoff = now - i64::from(app.cfg.run_retention_days) * 86400;
     let old: Vec<(i64, i64)> = app.db.with(|c| {
         let mut st = c.prepare("SELECT id, project_id FROM runs WHERE created_at < ?1")?;
         st.query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
@@ -253,11 +309,30 @@ fn nav<'a>(app: &'a App, site: &'a str, user: &'a User, projects: &'a [Project],
     Ok(pages::Nav { site, user, projects, current: Some(project), section, review_count: open_comment_count(app, project)? })
 }
 
+struct FlowRow {
+    id: String,
+    title: String,
+    area: Option<String>,
+    stage: String,
+}
+
+fn flows_of(app: &App, project: &Project) -> anyhow::Result<Vec<FlowRow>> {
+    app.db.with(|c| {
+        let mut st = c.prepare("SELECT flow_id, title, area, stage FROM flows WHERE project_id = ?1 ORDER BY COALESCE(area, ''), title")?;
+        st.query_map([project.id], |r| Ok(FlowRow { id: r.get(0)?, title: r.get(1)?, area: r.get(2)?, stage: r.get(3)? }))?.collect()
+    })
+}
+
+fn open_comments_on(app: &App, project: &Project, flow: &str) -> anyhow::Result<i64> {
+    app.db.with(|c| c.query_row("SELECT COUNT(*) FROM comments WHERE project_id = ?1 AND flow_id = ?2 AND resolved_at IS NULL AND parent_id IS NULL", params![project.id, flow], |r| r.get(0)))
+}
+
 pub fn project_page(app: &App, user: &User, project: &Project) -> R {
     let runs = runs_of(app, project, 20)?;
+    let flows = flows_of(app, project)?;
     let latest = runs.first();
     let n = |k: &str| latest.and_then(|r| r.summary.get(k)).and_then(Value::as_u64).unwrap_or(0);
-    let reviewing = latest.map(|r| r.flows.iter().filter(|f| matches!(f["stage"].as_str(), Some("draft" | "review"))).count()).unwrap_or(0);
+    let reviewing = flows.iter().filter(|f| matches!(f.stage.as_str(), "draft" | "review")).count();
     let tiles = if latest.is_some() {
         format!(
             r#"<div class="tiles"><div class="tile pass"><div class="k">Passed</div><div class="v">{}</div></div><div class="tile{}"><div class="k">Failed</div><div class="v">{}</div></div><div class="tile pend"><div class="k">Pending</div><div class="v">{}</div></div><div class="tile review"><div class="k">In review</div><div class="v">{reviewing}</div></div></div>"#,
@@ -271,38 +346,43 @@ pub fn project_page(app: &App, user: &User, project: &Project) -> R {
     };
     let title = match latest {
         Some(_) if n("failed") > 0 => format!(r#"{} — <em class="hl" style="color:#FFB59E">{} failing</em>"#, esc(&project.name), n("failed")),
-        Some(r) if r.executed => format!(r#"{} — <em class="hl">all green</em>"#, esc(&project.name)),
+        Some(r) if r.executed && n("passed") > 0 => format!(r#"{} — <em class="hl">all green</em>"#, esc(&project.name)),
         _ => esc(&project.name),
     };
     let lede = match latest {
         Some(r) => format!("Latest run {} by {}{}.", ago(r.created_at), r.by, r.branch.as_deref().map(|b| format!(" on {b}")).unwrap_or_default()),
+        None if !flows.is_empty() => "No runs in the last 30 days. The flow documents are below.".to_string(),
         None => "No runs yet. Publish one from your laptop or CI.".to_string(),
     };
     let mut body = String::new();
-    if let Some(r) = latest {
-        body.push_str(r#"<h2 class="sec">Flows</h2><div class="list" aria-label="Flows in the latest run">"#);
-        for f in &r.flows {
-            let status = f["status"].as_str().unwrap_or("not-run");
-            let stage = f["stage"].as_str().unwrap_or("");
-            let chip = if matches!(stage, "draft" | "review" | "approved") && status != "failed" { stage } else { status };
-            let dots: String = f["steps"].as_array().map(|a| a.iter().map(|s| format!(r#"<i class="{}"></i>"#, esc(s.as_str().unwrap_or("")))).collect()).unwrap_or_default();
-            let err = f["error"].as_str().map(|e| format!(r#"<span class="small" style="display:block;color:var(--fail)">{}</span>"#, esc(e))).unwrap_or_default();
+    if !flows.is_empty() {
+        body.push_str(r#"<h2 class="sec">Flows</h2><div class="list" aria-label="Flows">"#);
+        for f in &flows {
+            let in_run = latest.and_then(|r| r.flows.iter().find(|x| x["id"].as_str() == Some(f.id.as_str())).map(|x| (r.id, x)));
+            let status = in_run.and_then(|(_, x)| x["status"].as_str()).unwrap_or("not-run");
+            let chip = if matches!(f.stage.as_str(), "draft" | "review" | "approved") && status != "failed" { f.stage.as_str() } else { status };
+            let dots: String = in_run.and_then(|(_, x)| x["steps"].as_array()).map(|a| a.iter().map(|s| format!(r#"<i class="{}"></i>"#, esc(s.as_str().unwrap_or("")))).collect()).unwrap_or_default();
+            let err = in_run.and_then(|(_, x)| x["error"].as_str()).map(|e| format!(r#"<span class="small" style="display:block;color:var(--fail)">{}</span>"#, esc(e))).unwrap_or_default();
+            let href = match in_run {
+                Some((rid, _)) => format!("/{}/runs/{rid}/#flow={}", project.slug, pages::urlenc(&f.id)),
+                None => format!("/{}/flows/#flow={}", project.slug, pages::urlenc(&f.id)),
+            };
+            let open = open_comments_on(app, project, &f.id)?;
             body.push_str(&format!(
-                r#"<a class="row{}" href="/{}/runs/{}/#flow={}"><span class="t"><b>{}</b><span class="small muted">{}</span>{err}</span><span class="dots" aria-hidden="true">{dots}</span><span class="chip {}">{}</span></a>"#,
+                r#"<a class="row{}" href="{}"><span class="t"><b>{}</b><span class="small muted">{}</span>{err}</span><span class="dots" aria-hidden="true">{dots}</span>{}<span class="chip {}">{}</span></a>"#,
                 if status == "failed" { " failed" } else { "" },
-                esc(&project.slug),
-                r.id,
-                esc(&pages::urlenc(f["id"].as_str().unwrap_or(""))),
-                esc(f["title"].as_str().unwrap_or("")),
-                esc(f["area"].as_str().unwrap_or("")),
+                esc(&href),
+                esc(&f.title),
+                esc(f.area.as_deref().unwrap_or("")),
+                if open > 0 { format!(r#"<span class="pill amber">{open} open</span>"#) } else { String::new() },
                 esc(chip),
                 esc(&chip.replace('-', " "))
             ));
         }
         body.push_str("</div>");
-        body.push_str(
-            r#"<h2 class="sec">Runs</h2><div class="table"><table><thead><tr><th scope="col">When</th><th scope="col">Result</th><th scope="col">From</th><th scope="col">By</th></tr></thead><tbody>"#,
-        );
+    }
+    if !runs.is_empty() {
+        body.push_str(r#"<h2 class="sec">Runs</h2><div class="table"><table aria-label="Runs, newest first"><thead><tr><th scope="col">When</th><th scope="col">Result</th><th scope="col">From</th><th scope="col">By</th></tr></thead><tbody>"#);
         for r in &runs {
             let f = r.summary.get("failed").and_then(Value::as_u64).unwrap_or(0);
             let p = r.summary.get("passed").and_then(Value::as_u64).unwrap_or(0);
@@ -325,9 +405,11 @@ pub fn project_page(app: &App, user: &User, project: &Project) -> R {
             ));
         }
         body.push_str("</tbody></table></div>");
-        body.push_str(&format!(r#"<p class="small muted">Runs are kept for {} days. Flow documents live in your repository; comments are kept here.</p>"#, app.cfg.run_retention_days));
-    } else {
+    }
+    if flows.is_empty() && runs.is_empty() {
         body.push_str(&format!(r#"<div class="empty">Nothing published yet. <a href="/{}/publish">Send the first run</a>.</div>"#, esc(&project.slug)));
+    } else {
+        body.push_str(&format!(r#"<p class="small muted">Runs are kept for {} days. Flow documents and comments are kept.</p>"#, app.cfg.run_retention_days));
     }
     let projects = visible_projects(app, user)?;
     let site = app.cfg.site();
@@ -339,28 +421,21 @@ pub fn project_page(app: &App, user: &User, project: &Project) -> R {
 pub async fn review_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
     let user = require_user(&app, &h, &format!("/{slug}/review"))?;
     let (project, _) = project_for(&app, &user, &slug)?;
-    let runs = runs_of(&app, &project, 1)?;
     let mut list = String::new();
-    if let Some(r) = runs.first() {
-        for f in r.flows.iter().filter(|f| matches!(f["stage"].as_str(), Some("draft" | "review"))) {
-            let stage = f["stage"].as_str().unwrap_or("draft");
-            let open: i64 = app.db.with(|c| {
-                c.query_row("SELECT COUNT(*) FROM comments WHERE project_id = ?1 AND flow_id = ?2 AND resolved_at IS NULL", params![project.id, f["id"].as_str().unwrap_or("")], |r| r.get(0))
-            })?;
-            list.push_str(&format!(
-                r#"<a class="row" href="/{}/runs/{}/#flow={}"><span class="t"><b>{}</b><span class="small muted">{}</span></span>{}<span class="chip {stage}">{stage}</span></a>"#,
-                esc(&project.slug),
-                r.id,
-                esc(&pages::urlenc(f["id"].as_str().unwrap_or(""))),
-                esc(f["title"].as_str().unwrap_or("")),
-                esc(f["area"].as_str().unwrap_or("")),
-                if open > 0 { format!(r#"<span class="pill amber">{open} open</span>"#) } else { String::new() },
-                stage = esc(stage)
-            ));
-        }
+    for f in flows_of(&app, &project)?.iter().filter(|f| matches!(f.stage.as_str(), "draft" | "review")) {
+        let open = open_comments_on(&app, &project, &f.id)?;
+        list.push_str(&format!(
+            r#"<a class="row" href="/{}/flows/#flow={}"><span class="t"><b>{}</b><span class="small muted">{}</span></span>{}<span class="chip {stage}">{stage}</span></a>"#,
+            esc(&project.slug),
+            esc(&pages::urlenc(&f.id)),
+            esc(&f.title),
+            esc(f.area.as_deref().unwrap_or("")),
+            if open > 0 { format!(r#"<span class="pill amber">{open} open</span>"#) } else { String::new() },
+            stage = esc(&f.stage)
+        ));
     }
     if list.is_empty() {
-        list = r#"<div class="empty">No drafts to review in the latest run.</div>"#.into();
+        list = r#"<div class="empty">No drafts waiting for review.</div>"#.into();
     }
     let projects = visible_projects(&app, &user)?;
     let site = app.cfg.site();
@@ -368,6 +443,58 @@ pub async fn review_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<
     let head =
         pages::head(&format!("{} · Review", project.name), r#"Drafts waiting for <em class="hl">your eyes</em>"#, "Approval stays in git: set stage: approved and approved_by in the flow file.", "");
     Ok(axum::response::Html(pages::shell(&nav, &format!("Review · {}", project.name), &format!(r#"{head}<div class="body"><div class="list">{list}</div></div>"#))).into_response())
+}
+
+pub async fn flows_redirect(Path(slug): Path<String>) -> Response {
+    Redirect::permanent(&format!("/{}/flows/", pages::urlenc(&slug))).into_response()
+}
+
+/// The flow documents as they were last published, with comments: what reviewers read.
+pub async fn flows_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
+    let user = require_user(&app, &h, &format!("/{slug}/flows/"))?;
+    let (project, _) = project_for(&app, &user, &slug)?;
+    let (docs, theme): (Vec<String>, Option<String>) = app.db.with(|c| {
+        let mut st = c.prepare("SELECT doc FROM flows WHERE project_id = ?1 ORDER BY COALESCE(area, ''), title")?;
+        let docs = st.query_map([project.id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        let theme = c.query_row("SELECT theme FROM projects WHERE id = ?1", [project.id], |r| r.get(0))?;
+        Ok((docs, theme))
+    })?;
+    let flows: Vec<enocone_spec::results::FlowResult> = docs
+        .iter()
+        .filter_map(|d| serde_json::from_str(d).ok())
+        .map(|flow| enocone_spec::results::FlowResult { flow, status: Status::NotRun, skip_reason: None, duration_ms: 0, attempts: vec![] })
+        .collect();
+    let results = RunResults {
+        schema: RESULTS_SCHEMA.into(),
+        run: enocone_spec::results::RunInfo { id: "docs".into(), project: project.name.clone(), executed: false, ..Default::default() },
+        summary: enocone_spec::results::Summary::from_flows(&flows),
+        flows,
+        theme,
+    };
+    report_page(&app, &project, &results, &app.cfg.data)
+}
+
+/// A report page for `results`, with the project's comments, under a CSP that allows only the report's own script.
+fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPath) -> R {
+    let comments: Vec<Value> = app.db.with(|c| {
+        let mut st = c.prepare("SELECT c.flow_id, c.step_key, c.text, c.created_at, c.resolved_at, u.name, u.github_login, u.email FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 ORDER BY c.created_at")?;
+        st.query_map([project.id], |r| {
+            let author: Option<String> = r.get::<_, Option<String>>(5)?.or(r.get(6)?).or(r.get(7)?);
+            Ok(json!({ "flow": r.get::<_, String>(0)?, "step": r.get::<_, Option<String>>(1)?, "text": r.get::<_, String>(2)?, "at": r.get::<_, String>(3)?, "resolved": r.get::<_, Option<String>>(4)?.is_some(), "author": author }))
+        })?
+        .collect()
+    })?;
+    let mut extra = serde_json::Map::new();
+    extra.insert("comments".into(), Value::Array(comments));
+    let html = enocone_report::render_html_with(results, assets, &enocone_report::ReportOptions { inline_assets: false }, extra)?;
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(enocone_report::inline_script().as_bytes()));
+    let csp = format!(
+        "default-src 'self'; script-src 'sha256-{hash}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    );
+    let mut res = axum::response::Html(html).into_response();
+    res.headers_mut().insert("content-security-policy", HeaderValue::from_str(&csp)?);
+    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Ok(res)
 }
 
 fn parse_run(run: &str) -> Result<i64, Fail> {
@@ -390,25 +517,7 @@ pub async fn run_page(State(app): State<App>, h: HeaderMap, Path((slug, run)): P
     run_exists(&app, &project, run)?;
     let dir = run_dir(&app, project.id, run);
     let results: RunResults = serde_json::from_slice(&std::fs::read(dir.join("results.json"))?)?;
-    let comments: Vec<Value> = app.db.with(|c| {
-        let mut st = c.prepare("SELECT c.flow_id, c.step_key, c.text, c.created_at, c.resolved_at, u.name, u.github_login, u.email FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 ORDER BY c.created_at")?;
-        st.query_map([project.id], |r| {
-            let author: Option<String> = r.get::<_, Option<String>>(5)?.or(r.get(6)?).or(r.get(7)?);
-            Ok(json!({ "flow": r.get::<_, String>(0)?, "step": r.get::<_, Option<String>>(1)?, "text": r.get::<_, String>(2)?, "at": r.get::<_, String>(3)?, "resolved": r.get::<_, Option<String>>(4)?.is_some(), "author": author }))
-        })?
-        .collect()
-    })?;
-    let mut extra = serde_json::Map::new();
-    extra.insert("comments".into(), Value::Array(comments));
-    let html = enocone_report::render_html_with(&results, &dir, &enocone_report::ReportOptions { inline_assets: false }, extra)?;
-    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(enocone_report::inline_script().as_bytes()));
-    let csp = format!(
-        "default-src 'self'; script-src 'sha256-{hash}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-    );
-    let mut res = axum::response::Html(html).into_response();
-    res.headers_mut().insert("content-security-policy", HeaderValue::from_str(&csp)?);
-    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    Ok(res)
+    report_page(&app, &project, &results, &dir)
 }
 
 pub async fn run_asset(State(app): State<App>, h: HeaderMap, Path((slug, run, path)): Path<(String, String, String)>) -> R {

@@ -3,6 +3,8 @@
 #   project:SLUG:NAME[:REPO]     create a project
 #   invite:SLUG:WHO:ROLE         invite an email, @login or org/team
 #   token:EMAIL                  print a publish token for EMAIL
+#   link:EMAIL                   print a one-time sign-in link for EMAIL
+#   remove:SLUG:KIND:SUBJECT     remove a member (KIND is email, github or team)
 # Needs BIN and OWNER, like start.sh.
 set -eu
 port=$1 data=$2; shift 2
@@ -19,6 +21,8 @@ END
     project) post --data-urlencode "slug=$x" --data-urlencode "name=$y" --data-urlencode "repo=${z:-}" "$url/projects" ;;
     invite) post --data-urlencode "who=$y" --data-urlencode "role=$z" "$url/$x/members" ;;
     token) ENOCONE_DATA="$data" ENOCONE_PUBLIC_URL="$url" "$BIN" serve --new-token "$x" ;;
+    link) ENOCONE_DATA="$data" ENOCONE_PUBLIC_URL="$url" "$BIN" serve --sign-in-link "$x" ;;
+    remove) post --data-urlencode "kind=$y" --data-urlencode "subject=$z" "$url/$x/members/remove" ;;
   esac
 done
 echo "seeded"

@@ -101,6 +101,9 @@ pub fn app() -> Router {
         .route("/lead/{id}/milestones", get(milestones))
         // Emulated sandbox mailboxes (read-only APIs, same shapes as the real ones).
         .route("/postmark/email", post(postmark_send))
+        .route("/oidc/.well-known/openid-configuration", get(oidc_config))
+        .route("/oidc/.well-known/jwks", get(oidc_jwks))
+        .route("/oidc/token", get(oidc_token))
         .route("/postmark/messages/outbound", get(postmark_list))
         .route("/postmark/messages/outbound/{id}/details", get(postmark_details))
         .route("/mailpit/api/v1/search", get(mailpit_search))
@@ -334,6 +337,57 @@ fn emails_to(db: &Db, to: &str) -> Vec<Email> {
 
 fn postmark_ok(h: &HeaderMap) -> bool {
     h.get("x-postmark-server-token").and_then(|v| v.to_str().ok()) == Some(POSTMARK_TOKEN)
+}
+
+// ------------------------------------------------------------------ GitHub Actions OIDC stand-in
+//
+// A test issuer shaped like token.actions.githubusercontent.com, so the suite
+// can check how `enocone serve` treats CI tokens. The key is a fixed TEST key,
+// committed on purpose; nothing trusts it except a hub pointed at this fixture.
+
+/// The bearer token `GET /oidc/token` wants, like ACTIONS_ID_TOKEN_REQUEST_TOKEN.
+pub const OIDC_REQUEST_TOKEN: &str = "fixture-oidc-request";
+const OIDC_KEY_PEM: &str = include_str!("../assets/oidc-test-key.pem");
+const OIDC_KEY_N: &str = include_str!("../assets/oidc-test-key.n");
+const OIDC_KID: &str = "fixture-key-1";
+
+fn issuer(h: &HeaderMap) -> String {
+    let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("127.0.0.1:4010");
+    format!("http://{host}/oidc")
+}
+
+async fn oidc_config(h: HeaderMap) -> Response {
+    let iss = issuer(&h);
+    Json(json!({ "issuer": iss, "jwks_uri": format!("{iss}/.well-known/jwks"), "id_token_signing_alg_values_supported": ["RS256"] })).into_response()
+}
+
+async fn oidc_jwks() -> Response {
+    Json(json!({ "keys": [{ "kty": "RSA", "alg": "RS256", "use": "sig", "kid": OIDC_KID, "n": OIDC_KEY_N.trim(), "e": "AQAB" }] })).into_response()
+}
+
+/// Mint a token like GitHub's: `?audience=…&repository=owner/name&event_name=push&ref=refs/heads/main`.
+async fn oidc_token(h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Response {
+    if h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some(&format!("bearer {OIDC_REQUEST_TOKEN}"))
+        && h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some(&format!("Bearer {OIDC_REQUEST_TOKEN}"))
+    {
+        return unauthorised();
+    }
+    let get = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_string());
+    let repo = get("repository", "acme/shop");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let claims = json!({
+        "iss": issuer(&h), "aud": q.get("aud_override").cloned().unwrap_or_else(|| get("audience", "")), "sub": format!("repo:{repo}:ref:{}", get("ref", "refs/heads/main")),
+        "repository": repo, "repository_owner": repo.split('/').next().unwrap_or(""), "event_name": get("event_name", "push"),
+        "ref": get("ref", "refs/heads/main"), "sha": "0123456789abcdef0123456789abcdef01234567", "actor": get("actor", "dev"),
+        "workflow": "e2e", "run_id": "1", "iat": now, "nbf": now, "exp": now + get("ttl", "300").parse::<u64>().unwrap_or(300),
+    });
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some(OIDC_KID.into());
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(OIDC_KEY_PEM.as_bytes()).expect("fixture test key");
+    match jsonwebtoken::encode(&header, &claims, &key) {
+        Ok(t) => Json(json!({ "count": 1, "value": t })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// Postmark's send API (`POST /email`): what enocone serve uses for sign-in links.

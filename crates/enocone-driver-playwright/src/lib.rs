@@ -180,7 +180,12 @@ impl Session for PwSession {
             UiAction::Fill(v) => l.fill(&v, None).await,
             UiAction::Check => l.check(None).await,
             UiAction::Uncheck => l.uncheck(None).await,
-            UiAction::Select(v) => l.select_option(v.as_str(), None).await.map(|_| ()),
+            UiAction::Select(v) => {
+                // Like Playwright's own select: the visible label or the value.
+                let labels = l.locator("option").all_inner_texts().await.unwrap_or_default();
+                let by = if labels.iter().any(|t| t.trim() == v) { playwright_rs::protocol::SelectOption::Label(v.clone()) } else { playwright_rs::protocol::SelectOption::Value(v.clone()) };
+                l.select_option(by, None).await.map(|_| ())
+            }
             UiAction::Press(k) => l.press(&k, None).await,
             UiAction::Upload(f) => l.set_input_files(&std::path::PathBuf::from(f), None).await,
         }

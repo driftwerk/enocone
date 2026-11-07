@@ -134,7 +134,10 @@ flowchart LR
    GET: "{{env.WEB}}/postmark/messages/outbound"
    headers: { X-Postmark-Server-Token: fixture-postmark-token }
    query: { recipient: "stranger+{{run.short_id}}@example.test" }
-   expect: { status: 200, json: { $.TotalCount: 0 } }
+   expect:
+     status: 200
+     json:
+       $.TotalCount: 0
    ```
    ```exec
    run: |

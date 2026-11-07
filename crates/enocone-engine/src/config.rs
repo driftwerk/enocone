@@ -35,6 +35,19 @@ pub struct Config {
     /// The sandbox mailbox email blocks read.
     #[serde(default)]
     pub email: Option<EmailConfig>,
+    /// Where `enocone publish` sends runs.
+    #[serde(default)]
+    pub hub: Option<HubConfig>,
+}
+
+/// `[hub]`: the team site runs are published to.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HubConfig {
+    /// e.g. `https://enoc.one`
+    pub url: String,
+    /// The project's short name on the site, e.g. `shop`.
+    pub project: String,
 }
 
 /// `[email]`: where test emails land. `provider` is postmark, mailpit or mailhog.

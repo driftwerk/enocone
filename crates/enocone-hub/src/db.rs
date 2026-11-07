@@ -40,7 +40,19 @@ CREATE TABLE IF NOT EXISTS projects (
   slug TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   repo TEXT,
+  theme TEXT,
   created_at TEXT NOT NULL
+);
+-- The latest version of each flow document a run carried. Kept when runs expire.
+CREATE TABLE IF NOT EXISTS flows (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  flow_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  area TEXT,
+  stage TEXT NOT NULL,
+  doc TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, flow_id)
 );
 -- kind: email | github | team; subject is lower case (an address, a login, or org/team)
 CREATE TABLE IF NOT EXISTS members (
