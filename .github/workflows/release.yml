@@ -3,7 +3,7 @@ name: release
 # Cargo.toml. Each archive holds `enocone` and the Playwright driver it uses
 # (`playwright-driver/`) side by side; the .sha256 beside it is what
 # deployments and the Homebrew formula check. The tap's formula is then
-# updated to the new version.
+# updated to the new version, and the major-version tag (v0) moved to this release.
 on:
   push:
     # Versions only; the moving v0 tag (what `uses: driftwerk/enocone@v0` follows) is not a release.
@@ -78,6 +78,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
+      - name: Move the major-version tag (what `uses: driftwerk/enocone@v0` follows)
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          major=v${version%%.*}
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"
       - name: Update the Homebrew formula
         env:
           # A fine-grained token with Contents: read and write on driftwerk/homebrew-tap
