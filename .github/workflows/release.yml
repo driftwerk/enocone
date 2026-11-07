@@ -4,7 +4,8 @@ name: release
 # its root; the .sha256 file beside it is what deployments check.
 on:
   push:
-    tags: ["v*"]
+    # Versions only; the moving v0 tag (what `uses: driftwerk/enocone@v0` follows) is not a release.
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write
