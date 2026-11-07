@@ -31,6 +31,8 @@ async fn fixture() -> String {
 async fn enocone(project: &Path, base: &str, args: &[&str]) -> (i32, String) {
     let mut cmd = Command::new(BIN);
     cmd.arg("--project").arg(project).args(args).env("ENOCONE_VAR_API", format!("{base}/api")).env("ENOCONE_VAR_WEB", base).env("NO_COLOR", "1");
+    // Test projects must not write into the CI job's summary page.
+    cmd.env_remove("GITHUB_STEP_SUMMARY");
     let out = tokio::task::spawn_blocking(move || cmd.output().unwrap()).await.unwrap();
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     (out.status.code().unwrap_or(-1), text)
@@ -118,7 +120,7 @@ async fn wrong_amount_fails_with_evidence() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_lists_tools_and_validates() {
-    let mut child = Command::new(BIN).arg("--project").arg(demo()).arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut child = Command::new(BIN).arg("--project").arg(demo()).arg("mcp").env_remove("GITHUB_STEP_SUMMARY").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut rpc = |id: u64, method: &str, params: serde_json::Value| -> serde_json::Value {
@@ -285,7 +287,7 @@ fn old_results_json_still_renders() {
             "# The old report renders\n\nIt draws.\n\n## Then\n\n1. **The flow page shows its title and step**\n   ```browser\n   - goto: \"{page}#flow=a\"\n   - expect: {{ heading: A }}\n   - expect: {{ text: Behaved as documented }}\n   - expect: {{ text: GET /x }}\n   ```\n"
         ),
     );
-    let o = Command::new(BIN).arg("--project").arg(&check).args(["run", "--out", check.join("report").to_str().unwrap()]).env("NO_COLOR", "1").output().unwrap();
+    let o = Command::new(BIN).arg("--project").arg(&check).args(["run", "--out", check.join("report").to_str().unwrap()]).env("NO_COLOR", "1").env_remove("GITHUB_STEP_SUMMARY").output().unwrap();
     assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
 }
 
