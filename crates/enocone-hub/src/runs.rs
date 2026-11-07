@@ -356,30 +356,63 @@ pub fn project_page(app: &App, user: &User, project: &Project) -> R {
     };
     let mut body = String::new();
     if !flows.is_empty() {
-        body.push_str(r#"<h2 class="sec">Flows</h2><div class="list" aria-label="Flows">"#);
+        // Grouped by area, like the report.
+        body.push_str(r#"<h2 class="sec">Flows</h2>"#);
+        let mut groups: Vec<(String, Vec<&FlowRow>)> = Vec::new();
         for f in &flows {
-            let in_run = latest.and_then(|r| r.flows.iter().find(|x| x["id"].as_str() == Some(f.id.as_str())).map(|x| (r.id, x)));
-            let status = in_run.and_then(|(_, x)| x["status"].as_str()).unwrap_or("not-run");
-            let chip = if matches!(f.stage.as_str(), "draft" | "review" | "approved") && status != "failed" { f.stage.as_str() } else { status };
-            let dots: String = in_run.and_then(|(_, x)| x["steps"].as_array()).map(|a| a.iter().map(|s| format!(r#"<i class="{}"></i>"#, esc(s.as_str().unwrap_or("")))).collect()).unwrap_or_default();
-            let err = in_run.and_then(|(_, x)| x["error"].as_str()).map(|e| format!(r#"<span class="small" style="display:block;color:var(--fail)">{}</span>"#, esc(e))).unwrap_or_default();
-            let href = match in_run {
-                Some((rid, _)) => format!("/{}/runs/{rid}/#flow={}", project.slug, pages::urlenc(&f.id)),
-                None => format!("/{}/flows/#flow={}", project.slug, pages::urlenc(&f.id)),
+            let area = f.area.clone().unwrap_or_else(|| "General".into());
+            match groups.last_mut() {
+                Some((a, list)) if *a == area => list.push(f),
+                _ => groups.push((area, vec![f])),
+            }
+        }
+        for (area, list) in &groups {
+            let mut rows = String::new();
+            let (mut passed, mut failed) = (0, 0);
+            for f in list {
+                let in_run = latest.and_then(|r| r.flows.iter().find(|x| x["id"].as_str() == Some(f.id.as_str())).map(|x| (r.id, x)));
+                let status = in_run.and_then(|(_, x)| x["status"].as_str()).unwrap_or("not-run");
+                match status {
+                    "passed" => passed += 1,
+                    "failed" => failed += 1,
+                    _ => {}
+                }
+                let chip = if matches!(f.stage.as_str(), "draft" | "review" | "approved") && status != "failed" { f.stage.as_str() } else { status };
+                let steps = in_run.and_then(|(_, x)| x["steps"].as_array());
+                let dots: String = steps.map(|a| a.iter().map(|s| format!(r#"<i class="{}"></i>"#, esc(s.as_str().unwrap_or("")))).collect()).unwrap_or_default();
+                let sub = match steps {
+                    Some(a) => format!("{} steps", a.len()),
+                    None => "not in the latest run".into(),
+                };
+                let err = in_run.and_then(|(_, x)| x["error"].as_str()).map(|e| format!(r#"<span class="small" style="display:block;color:var(--fail)">{}</span>"#, esc(e))).unwrap_or_default();
+                let href = match in_run {
+                    Some((rid, _)) => format!("/{}/runs/{rid}/#flow={}", project.slug, pages::urlenc(&f.id)),
+                    None => format!("/{}/flows/#flow={}", project.slug, pages::urlenc(&f.id)),
+                };
+                let open = open_comments_on(app, project, &f.id)?;
+                rows.push_str(&format!(
+                    r#"<a class="row{}" href="{}"><span class="t"><b>{}</b><span class="small muted">{}</span>{err}</span><span class="dots" aria-hidden="true">{dots}</span>{}<span class="chip {}">{}</span></a>"#,
+                    if status == "failed" { " failed" } else { "" },
+                    esc(&href),
+                    esc(&f.title),
+                    esc(&sub),
+                    if open > 0 { format!(r#"<span class="pill amber">{open} open</span>"#) } else { String::new() },
+                    esc(chip),
+                    esc(&chip.replace('-', " "))
+                ));
+            }
+            let tally = match (passed, failed) {
+                (_, f) if f > 0 => format!(r#"<span class="chip failed">{f} failed</span>"#),
+                (p, _) if p == list.len() => r#"<span class="chip passed">all passed</span>"#.to_string(),
+                _ => String::new(),
             };
-            let open = open_comments_on(app, project, &f.id)?;
             body.push_str(&format!(
-                r#"<a class="row{}" href="{}"><span class="t"><b>{}</b><span class="small muted">{}</span>{err}</span><span class="dots" aria-hidden="true">{dots}</span>{}<span class="chip {}">{}</span></a>"#,
-                if status == "failed" { " failed" } else { "" },
-                esc(&href),
-                esc(&f.title),
-                esc(f.area.as_deref().unwrap_or("")),
-                if open > 0 { format!(r#"<span class="pill amber">{open} open</span>"#) } else { String::new() },
-                esc(chip),
-                esc(&chip.replace('-', " "))
+                r#"<section class="group" aria-label="{a}"><div style="display:flex;align-items:baseline;gap:12px;margin:6px 0 10px"><h3 class="serif" style="font-size:20px">{a}</h3><span class="small muted">{n} flow{s}</span>{tally}</div><div class="list">{rows}</div></section>"#,
+                a = esc(area),
+                n = list.len(),
+                s = if list.len() == 1 { "" } else { "s" },
             ));
         }
-        body.push_str("</div>");
     }
     if !runs.is_empty() {
         body.push_str(r#"<h2 class="sec">Runs</h2><div class="table"><table aria-label="Runs, newest first"><thead><tr><th scope="col">When</th><th scope="col">Result</th><th scope="col">From</th><th scope="col">By</th></tr></thead><tbody>"#);
@@ -486,6 +519,7 @@ fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPa
     })?;
     let mut extra = serde_json::Map::new();
     extra.insert("comments".into(), Value::Array(comments));
+    extra.insert("hub".into(), json!({ "site": app.cfg.site(), "home": "/", "project": project.name, "project_url": format!("/{}", project.slug), "review_url": format!("/{}/review", project.slug), "retention_days": app.cfg.run_retention_days }));
     let html = enocone_report::render_html_with(results, assets, &enocone_report::ReportOptions { inline_assets: false }, extra)?;
     let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(enocone_report::inline_script().as_bytes()));
     let csp = format!(

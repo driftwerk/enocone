@@ -295,3 +295,8 @@ footer.foot { font-family: Fraunces, Georgia, serif; font-size: 13px; }
 /* The wordmark: Fraunces, with the middle "c" in lavender italic. */
 header.top .brand .wordmark { font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 21px; letter-spacing: -0.015em; }
 header.top .brand .wordmark em { font-style: italic; font-weight: 400; color: #B9ACFF; }
+
+/* Served by an enocone site: a way back to the project. */
+header.top .crumbs { display: flex; gap: 14px; align-items: center; font-size: 14px; font-weight: 600; }
+header.top .crumbs a { color: #E9E7F5; text-decoration: none; padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,.08); border: 1px solid rgba(185,172,255,.35); }
+header.top .crumbs a:hover { background: rgba(185,172,255,.2); }
