@@ -703,6 +703,79 @@ fn plural(n: usize, word: &str) -> String {
     if n == 1 { format!("1 {word}") } else { format!("{n} {word}s") }
 }
 
+/// Check a step's tables against each other and against the `{{row.…}}` its
+/// blocks use, and work out how linked tables point at the first one.
+fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Diagnostic>) -> Vec<Table> {
+    let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
+    for t in &tables {
+        let mut seen = std::collections::HashSet::new();
+        for c in &t.columns {
+            if c.key.is_empty() {
+                err(diags, t.line, format!("table column `{}` needs a name made of letters or digits", c.header));
+            } else if !seen.insert(c.key.clone()) {
+                err(diags, t.line, format!("two table columns are both `{}`; give them different names", c.key));
+            }
+        }
+        if t.rows.is_empty() {
+            err(diags, t.line, "table has no rows".into());
+        }
+    }
+    if tables.len() > 1 {
+        let driver_name = tables[0].name.clone();
+        match &driver_name {
+            None => err(diags, tables[0].line, "this step has several tables: name the first one with a `Table: <name>` line above it, so the others can link to it".into()),
+            Some(dn) => {
+                let dkey = column_key(dn);
+                let ids: std::collections::HashSet<String> = tables[0].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
+                for t in tables.iter_mut().skip(1) {
+                    let Some(name) = t.name.clone() else {
+                        err(diags, t.line, "name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{row.<name>}}`".to_string());
+                        continue;
+                    };
+                    match t.columns.iter().position(|c| c.key == dkey) {
+                        None => err(
+                            diags,
+                            t.line,
+                            format!(
+                                "table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"
+                            ),
+                        ),
+                        Some(i) => {
+                            t.link = Some(i);
+                            for r in &t.rows {
+                                let id = r.cells.get(i).map(|c| c.trim()).unwrap_or("");
+                                if !ids.contains(id) {
+                                    err(diags, r.line, format!("`{id}` in the `{dn}` column of table `{name}` isn't the id of any row in `{dn}`"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // `{{row.x}}` must name a column of the first table, or a linked table.
+    let known: Vec<String> = match tables.first() {
+        Some(d) => d.columns.iter().map(|c| c.key.clone()).chain(tables.iter().skip(1).filter_map(|t| t.name.as_deref().map(column_key))).collect(),
+        None => vec![],
+    };
+    for b in blocks {
+        for v in crate::template::variables(&b.value) {
+            let mut parts = v.split('.');
+            if parts.next() != Some("row") {
+                continue;
+            }
+            let col = parts.next().unwrap_or("");
+            if tables.is_empty() {
+                err(diags, b.line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
+            } else if !known.iter().any(|k| k == col) {
+                err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", known.join(", ")));
+            }
+        }
+    }
+    tables
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,77 +876,4 @@ Why it matters.
         assert!(p.diagnostics.iter().any(|d| d.message.contains("Title")));
         assert!(p.diagnostics.iter().any(|d| d.message.contains("not valid YAML")));
     }
-}
-
-/// Check a step's tables against each other and against the `{{row.…}}` its
-/// blocks use, and work out how linked tables point at the first one.
-fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Diagnostic>) -> Vec<Table> {
-    let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
-    for t in &tables {
-        let mut seen = std::collections::HashSet::new();
-        for c in &t.columns {
-            if c.key.is_empty() {
-                err(diags, t.line, format!("table column `{}` needs a name made of letters or digits", c.header));
-            } else if !seen.insert(c.key.clone()) {
-                err(diags, t.line, format!("two table columns are both `{}`; give them different names", c.key));
-            }
-        }
-        if t.rows.is_empty() {
-            err(diags, t.line, "table has no rows".into());
-        }
-    }
-    if tables.len() > 1 {
-        let driver_name = tables[0].name.clone();
-        match &driver_name {
-            None => err(diags, tables[0].line, "this step has several tables: name the first one with a `Table: <name>` line above it, so the others can link to it".into()),
-            Some(dn) => {
-                let dkey = column_key(dn);
-                let ids: std::collections::HashSet<String> = tables[0].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
-                for t in tables.iter_mut().skip(1) {
-                    let Some(name) = t.name.clone() else {
-                        err(diags, t.line, "name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{row.<name>}}`".to_string());
-                        continue;
-                    };
-                    match t.columns.iter().position(|c| c.key == dkey) {
-                        None => err(
-                            diags,
-                            t.line,
-                            format!(
-                                "table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"
-                            ),
-                        ),
-                        Some(i) => {
-                            t.link = Some(i);
-                            for r in &t.rows {
-                                let id = r.cells.get(i).map(|c| c.trim()).unwrap_or("");
-                                if !ids.contains(id) {
-                                    err(diags, r.line, format!("`{id}` in the `{dn}` column of table `{name}` isn't the id of any row in `{dn}`"));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // `{{row.x}}` must name a column of the first table, or a linked table.
-    let known: Vec<String> = match tables.first() {
-        Some(d) => d.columns.iter().map(|c| c.key.clone()).chain(tables.iter().skip(1).filter_map(|t| t.name.as_deref().map(column_key))).collect(),
-        None => vec![],
-    };
-    for b in blocks {
-        for v in crate::template::variables(&b.value) {
-            let mut parts = v.split('.');
-            if parts.next() != Some("row") {
-                continue;
-            }
-            let col = parts.next().unwrap_or("");
-            if tables.is_empty() {
-                err(diags, b.line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
-            } else if !known.iter().any(|k| k == col) {
-                err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", known.join(", ")));
-            }
-        }
-    }
-    tables
 }
