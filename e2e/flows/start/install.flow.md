@@ -37,13 +37,10 @@ flowchart LR
   without anyone editing it by hand.
 - The same archive is what `enocone serve` deployments and the Docker image
   use, so all three run the same files.
-
-## Open questions
-
-- Is macOS on Intel worth a build? GitHub still offers Intel Mac runners,
-  but few new users will be on one.
-- Should there also be a `curl | sh` install script for machines without
-  Homebrew?
+- Builds cover macOS on Apple silicon and Linux on x86_64 and arm64. Intel
+  Macs aren't built for; `cargo install` works there.
+- Homebrew is the install for people and the GitHub Action for CI; there is
+  no `curl | sh` script. Release archives are on the GitHub release page.
 
 ## Given
 

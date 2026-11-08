@@ -39,11 +39,9 @@ flowchart LR
 - The AI still never approves a flow; approval stays a person's change in
   git.
 - The guide (`format_guide`) gains a section on working with the team site.
-
-## Open questions
-
-- Should the AI be able to reply to a comment on the site ("changed to 30
-  days in the new version"), or only change the draft?
+- The AI answers comments by changing the draft, not by replying on the
+  site: the comment then shows as outdated beside the new version. Comments
+  are where people talk to each other.
 
 ## Given
 

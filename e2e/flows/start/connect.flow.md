@@ -38,12 +38,9 @@ flowchart LR
 - The `.mcp.json` it writes works with any tool that reads that file
   (Claude Code, Cursor); the printout also shows the one-line `claude mcp
   add` for using enocone in every project.
-
-## Open questions
-
-- Should `init` create the project on the site itself when you're signed in
-  as someone allowed to? It saves a step, but it means `init` changes
-  something outside the repository.
+- `init` only writes files in the repository; it never creates the project
+  on the site. Creating one makes someone its owner on a shared site, so
+  it stays a step the person takes, printed under "Next".
 
 ## Given
 
