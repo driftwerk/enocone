@@ -33,6 +33,10 @@ flowchart LR
 - A table is an ordinary Markdown table placed in a step. The step's blocks
   run once per row; `{{row.<column>}}` is that row's value in a column, with
   the column's header written in lower case and spaces as `_`.
+- A column whose header ends in `?` (`discount?`) holds the expected result;
+  the others are inputs. Blocks read it without the `?` (`{{row.discount}}`).
+- Tables run only in steps. A table anywhere else in the flow, such as under
+  Rules, is shown as part of the document but not run.
 - Each row is its own result: passed, failed (with what was expected and
   what came back) or skipped. The step passes only when every row does.
 - The report shows the table with each row coloured by its result, and the
@@ -46,10 +50,12 @@ flowchart LR
   current row, so a request can send an order with all its items. A linked
   row whose id doesn't exist in the first table is an error in the flow,
   reported with its line.
+- Linking goes one level deep: orders → items. A linked table can't itself
+  be linked to (items → options) in this version.
 - A `{{row.…}}` naming a column that isn't in the table is an error in the
   flow, reported before anything runs.
-- Rows run one after another by default, each with a fresh `{{row}}`;
-  captures don't carry from one row to the next.
+- Rows run one after another, each with a fresh `{{row}}`; captures don't
+  carry from one row to the next.
 - Tables are best checked through `http` or `exec` blocks. Browser blocks
   work too, but each row drives the browser, which is slow.
 - On enoc.one, a reviewer can comment on one row of a table, and the comment
@@ -122,17 +128,6 @@ expect:
   json:
     $.total: "{{row.total}}"
 ```
-
-## Open questions
-
-- How should a column be marked as an expected value rather than an input?
-  FIT used a trailing `?` in the header (`discount?`); otherwise a column is
-  an expectation when the block checks it.
-- Should a table be allowed under Rules, where business people write, as
-  well as in steps?
-- Should rows be able to run in parallel when the project allows it?
-- Is one level of linking enough (orders → items), or will people need
-  items → options too?
 
 ## Given
 
