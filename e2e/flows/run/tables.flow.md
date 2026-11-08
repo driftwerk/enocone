@@ -3,7 +3,8 @@ area: Running flows
 tags: [tables, examples]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-08)
 ---
 
 # A rule written as a table of examples runs once per row, and linked tables describe data with parts
