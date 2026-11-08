@@ -183,7 +183,12 @@ footer.foot { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wr
 /* ---------- designs: flow charts, mockups, storyboards */
 .flow-designs { display: flex; flex-direction: column; gap: 18px; margin: 4px 0 8px; }
 figure.chart { margin: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--sunken); padding: 14px 14px 10px; }
-.chart-scroll { overflow-x: auto; }
+.chart-scroll { overflow-x: auto; position: relative; }
+.chart-scroll.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
+.chart-scroll.more-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); }
+.chart-scroll.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent); }
+.chart-hint { text-align: right; color: var(--muted); margin-top: 4px; }
+.chart-hint[hidden] { display: none; }
 .chart-svg { display: block; max-width: 100%; height: auto; margin: 0 auto; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 .chart-edge { fill: none; stroke: var(--skip); stroke-width: 1.6; }
 .chart-edge.dashed { stroke-dasharray: 5 4; }

@@ -150,6 +150,7 @@ impl App {
             .route("/{slug}/members", get(members_page).post(members_add))
             .route("/{slug}/members/remove", post(members_remove))
             .route("/{slug}/visibility", post(set_visibility))
+            .route("/{slug}/search", post(set_search))
             .route("/{slug}/publish", get(runs::publish_page))
             .route("/{slug}/review", get(runs::review_page))
             .route("/{slug}/review/{flow}", get(review::flow_review_page))
@@ -160,7 +161,7 @@ impl App {
             .route("/{slug}/runs/{run}", get(runs::run_redirect))
             .route("/{slug}/runs/{run}/", get(runs::run_page))
             .route("/{slug}/runs/{run}/assets/{*path}", get(runs::run_asset))
-            .layer(axum::middleware::from_fn(security_headers))
+            .layer(axum::middleware::from_fn_with_state(self.clone(), security_headers))
             .with_state(self)
     }
 }
@@ -184,9 +185,19 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn security_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+async fn security_headers(State(app): State<App>, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    // Search engines may index only public projects whose owners haven't hidden them.
+    let first = req.uri().path().trim_start_matches('/').split('/').next().unwrap_or("").to_string();
     let mut res = next.run(req).await;
+    let indexable = match first.as_str() {
+        "" => true,
+        s if valid_slug(s) => app.db.with(|c| db::project_by_slug(c, s)).ok().flatten().is_some_and(|p| p.public && !p.hide_from_search),
+        _ => false,
+    };
     let h = res.headers_mut();
+    if !indexable {
+        h.insert("x-robots-tag", HeaderValue::from_static("noindex, nofollow"));
+    }
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
@@ -791,7 +802,11 @@ fn visibility_panel(p: &Project) -> String {
         format!(
             r#"<section class="panel" aria-labelledby="vis" style="gap:10px"><h2 id="vis" class="serif" style="font-size:22px">Visibility: <span class="pill iris">Public</span></h2>
 <p class="small">Anyone with the link can read this project's flows, runs, screenshots and review comments. Only members can comment or publish.</p>
-<form method="post" action="/{slug}/visibility"><input type="hidden" name="public" value="0"><button class="btn ghost" type="submit">Make private</button></form></section>"#
+<form method="post" action="/{slug}/search" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input type="hidden" name="hide" value="{hide_next}"><span class="small">{search_state}</span><button class="btn small ghost" type="submit">{search_btn}</button></form>
+<form method="post" action="/{slug}/visibility"><input type="hidden" name="public" value="0"><button class="btn ghost" type="submit">Make private</button></form></section>"#,
+            hide_next = if p.hide_from_search { "0" } else { "1" },
+            search_state = if p.hide_from_search { "Hidden from search engines." } else { "Search engines can find it." },
+            search_btn = if p.hide_from_search { "Let search engines find it" } else { "Hide from search engines" },
         )
     } else {
         format!(
@@ -801,6 +816,22 @@ fn visibility_panel(p: &Project) -> String {
 <form method="post" action="/{slug}/visibility" style="display:flex;flex-direction:column;gap:10px"><input type="hidden" name="public" value="1"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="understood" value="yes" required> <span>I understand that everything published here becomes public</span></label><button class="btn iris" type="submit">Make public</button></form></section>"#
         )
     }
+}
+
+#[derive(Deserialize)]
+struct SearchForm {
+    hide: String,
+}
+
+async fn set_search(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>, Form(f): Form<SearchForm>) -> R {
+    same_origin(&app, &h)?;
+    let user = require_user(&app, &h, &format!("/{slug}/members"))?;
+    let (project, role) = project_for(&app, &user, &slug)?;
+    if role != Role::Owner {
+        return Err(Fail::Forbidden("Only an owner can change who can see this project."));
+    }
+    app.db.with(|c| c.execute("UPDATE projects SET hide_from_search = ?1 WHERE id = ?2", params![f.hide == "1", project.id]))?;
+    Ok(Redirect::to(&format!("/{}/members", project.slug)).into_response())
 }
 
 #[derive(Deserialize)]

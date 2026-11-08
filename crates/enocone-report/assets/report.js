@@ -418,7 +418,19 @@
     const legend = executed
       ? h("div", { class: "chart-legend small" }, [["passed", "Passed"], ["failed", "Failed"], ["pending", "Pending"], ["skipped", "Not run"]].map(([k, l]) => h("span", null, h("i", { class: `sw s-${k}` }), l)), h("span", null, "Click a box to open its step"))
       : h("div", { class: "chart-legend small" }, h("span", null, h("i", { class: "sw s-planned" }), "Planned: boxes take their step's result after a run"));
-    return h("figure", { class: "chart", role: "figure", "aria-label": "Flow chart" }, h("div", { class: "chart-scroll" }, root), legend);
+    // A chart wider than its box scrolls sideways: say so, and shade the edge with more to see.
+    const scroller = h("div", { class: "chart-scroll" }, root);
+    const hint = h("div", { class: "chart-hint small", hidden: true }, "Scroll sideways to see the whole chart →");
+    const check = () => {
+      const more = scroller.scrollWidth > scroller.clientWidth + 2;
+      hint.hidden = !more;
+      scroller.classList.toggle("more-right", more && scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 2);
+      scroller.classList.toggle("more-left", more && scroller.scrollLeft > 2);
+    };
+    scroller.addEventListener("scroll", check, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(check).observe(scroller);
+    requestAnimationFrame(check);
+    return h("figure", { class: "chart", role: "figure", "aria-label": "Flow chart" }, scroller, hint, legend);
   }
 
   function screenDoc(html) {

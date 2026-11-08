@@ -20,7 +20,8 @@ flowchart LR
   1[A private project with runs and comments] --> 2[A visitor gets not found]
   1 --> 3[An owner makes it public, after a warning] --> 4[Anyone reads the project, runs and review pages]
   4 --> 5[Commenting and publishing still need an invitation]
-  3 -.->|later| 7[Made private again: not found again]
+  4 --> 7[An owner can hide it from search engines]
+  3 -.->|later| 8[Made private again: not found again]
 ```
 
 ## Rules
@@ -131,7 +132,8 @@ flowchart LR
      curl -s -o /dev/null -w "%{http_code} {{run_path}}\n" "http://127.0.0.1:18190{{run_path}}"
      curl -s -o /dev/null -w "%{http_code} /shop/review/quotes.accept-from-email\n" "http://127.0.0.1:18190/shop/review/quotes.accept-from-email"
      curl -s -D - -o /dev/null "http://127.0.0.1:18190/shop" | grep -ci '^content-security-policy'
-   expect: { stdout: { matches: "^200 /shop\\n200 /shop/runs/\\d+/\\n200 /shop/review/quotes.accept-from-email\\n1" } }
+     curl -s -D - -o /dev/null "http://127.0.0.1:18190/shop" | grep -ci '^x-robots-tag' || true
+   expect: { stdout: { matches: "^200 /shop\\n200 /shop/runs/\\d+/\\n200 /shop/review/quotes.accept-from-email\\n1\\n0" } }
    ```
    ```browser
    # A visitor reads the review page, with Sam's comment but not his email
@@ -176,9 +178,35 @@ flowchart LR
    - screenshot
    ```
 
-7. **When Priya makes it private again, the visitor gets not found again**
+7. **Priya hides the project from search engines, and its pages tell them not to index it**
    ```exec
-   # Get Priya a new sign-in link
+   # Get Priya a sign-in link
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18190 "{{run.tmp}}/site" "link:priya+{{run.short_id}}@example.test"
+   capture: { priya_link3: { regex: "(http://\\S+/auth/email\\?token=\\w+)" } }
+   ```
+   ```browser
+   # Priya hides shop from search engines
+   - goto: "{{priya_link3}}"
+   - click: Sign in to
+   - goto: "http://127.0.0.1:18190/shop/members"
+   - expect: "Search engines can find it."
+   - click: { button: Hide from search engines }
+   - expect: "Hidden from search engines."
+   - click: Sign out
+   ```
+   ```exec
+   # Check the search-engine header on the project page and a run, signed out
+   run: |
+     curl -s -D - -o /dev/null "http://127.0.0.1:18190/shop" | grep -i '^x-robots-tag' | tr -d '\r'
+     curl -s -D - -o /dev/null "http://127.0.0.1:18190{{run_path}}" | grep -i '^x-robots-tag' | tr -d '\r'
+     curl -s -o /dev/null -w "still readable %{http_code}\n" "http://127.0.0.1:18190/shop"
+   expect: { stdout: { matches: "x-robots-tag: noindex, nofollow\\nx-robots-tag: noindex, nofollow\\nstill readable 200" } }
+   ```
+
+8. **When Priya makes it private again, the visitor gets not found again**
+   ```exec
+   # Get Priya another sign-in link
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18190 "{{run.tmp}}/site" "link:priya+{{run.short_id}}@example.test"
    capture: { priya_link2: { regex: "(http://\\S+/auth/email\\?token=\\w+)" } }

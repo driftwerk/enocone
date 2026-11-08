@@ -112,6 +112,9 @@ impl Db {
         if conn.prepare("SELECT public FROM projects LIMIT 0").is_err() {
             conn.execute_batch("ALTER TABLE projects ADD COLUMN public INTEGER NOT NULL DEFAULT 0")?;
         }
+        if conn.prepare("SELECT hide_from_search FROM projects LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE projects ADD COLUMN hide_from_search INTEGER NOT NULL DEFAULT 0")?;
+        }
         Ok(Db(Arc::new(Mutex::new(conn))))
     }
 
@@ -166,16 +169,20 @@ pub struct Project {
     pub repo: Option<String>,
     /// Anyone with the link can read it; only members can change anything.
     pub public: bool,
+    /// A public project whose owner asked search engines not to index it.
+    pub hide_from_search: bool,
 }
 
 pub fn project_by_slug(c: &Connection, slug: &str) -> rusqlite::Result<Option<Project>> {
-    c.query_row("SELECT id, slug, name, repo, public FROM projects WHERE slug = ?1", [slug], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)? }))
-        .optional()
+    c.query_row("SELECT id, slug, name, repo, public, hide_from_search FROM projects WHERE slug = ?1", [slug], |r| {
+        Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)?, hide_from_search: r.get(5)? })
+    })
+    .optional()
 }
 
 pub fn all_projects(c: &Connection) -> rusqlite::Result<Vec<Project>> {
-    let mut st = c.prepare("SELECT id, slug, name, repo, public FROM projects ORDER BY slug")?;
-    st.query_map([], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)? }))?.collect()
+    let mut st = c.prepare("SELECT id, slug, name, repo, public, hide_from_search FROM projects ORDER BY slug")?;
+    st.query_map([], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)?, hide_from_search: r.get(5)? }))?.collect()
 }
 
 pub fn teams_of(c: &Connection, user_id: i64) -> rusqlite::Result<Vec<String>> {
