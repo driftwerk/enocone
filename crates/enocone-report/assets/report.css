@@ -300,3 +300,9 @@ header.top .brand .wordmark em { font-style: italic; font-weight: 400; color: #B
 header.top .crumbs { display: flex; gap: 14px; align-items: center; font-size: 14px; font-weight: 600; }
 header.top .crumbs a { color: #E9E7F5; text-decoration: none; padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,.08); border: 1px solid rgba(185,172,255,.35); }
 header.top .crumbs a:hover { background: rgba(185,172,255,.2); }
+.md table { border-collapse: collapse; margin: 0 0 14px; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--line); padding: 6px 12px; text-align: left; }
+.md th { background: var(--sunken); font-weight: 600; }
+.md td.num, .md th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.md pre { background: var(--code); border: 1px solid var(--line-2); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0 0 14px; font-size: 13px; line-height: 1.5; }
+.md pre code { background: none; padding: 0; }

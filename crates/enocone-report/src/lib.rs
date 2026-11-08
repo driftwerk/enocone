@@ -46,7 +46,7 @@ pub fn render_html_with(results: &RunResults, assets_root: &Path, opts: &ReportO
     if let Some(obj) = value.as_object_mut() {
         obj.extend(extra);
     }
-    let json = serde_json::to_string(&value)?.replace("</", "<\\/").replace("<!--", "<\\!--");
+    let json = script_safe_json(&value)?;
     let title = if results.run.executed { format!("{} · enocone report", results.run.project) } else { format!("{} · flow documentation", results.run.project) };
     let mut html = String::with_capacity(json.len() + CSS.len() + JS.len() + 1024);
     html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
@@ -159,4 +159,25 @@ pub fn markdown_summary(results: &RunResults, report_link: Option<&str>) -> Stri
         let _ = writeln!(m, "[Open the full report]({link})");
     }
     m
+}
+
+/// JSON to embed in a `<script type="application/json">` and read back with
+/// `JSON.parse`. Every `<` becomes `<` (valid JSON, and `<` only occurs
+/// inside strings), so no value can close the script or open an HTML comment.
+/// (Escapes like `<\!--` are fine in JavaScript but invalid JSON.)
+fn script_safe_json(value: &serde_json::Value) -> serde_json::Result<String> {
+    Ok(serde_json::to_string(value)?.replace('<', "\\u003c"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::script_safe_json;
+
+    #[test]
+    fn embedded_json_survives_script_and_comment_markup() {
+        let v = serde_json::json!({ "stdout": "<!-- c --></script><script>x</script> a\\.b <p>" });
+        let s = script_safe_json(&v).unwrap();
+        assert!(!s.contains('<'));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&s).unwrap(), v);
+    }
 }

@@ -134,3 +134,10 @@ a.row:hover { border-color: var(--lav); }
 .home .h-chip{border-radius:99px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
 @media (max-width:700px){.home .h-wrap{padding:0 16px} .home .h-sec{padding:56px 0}}
 .home button.h-btn { font-family: Inter, system-ui, sans-serif; }
+.md table { border-collapse: collapse; margin: 0 0 12px; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--rule); padding: 6px 12px; text-align: left; }
+.md th { background: var(--paper2); font-weight: 600; }
+.md pre { background: var(--paper2); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0 0 12px; font-size: 13px; line-height: 1.5; }
+.md pre code { background: none; padding: 0; }
+.md p { margin: 0 0 10px; } .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+.md code { background: var(--paper2); padding: 1px 5px; border-radius: 4px; font-size: 13px; }

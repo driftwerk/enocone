@@ -57,6 +57,72 @@ flowchart LR
 - The MCP server's guide teaches tables, so the AI tool writes a rule with
   many cases as a table rather than as many steps.
 
+## How it reads
+
+A step with a table of examples, as it's written in the flow. The table is
+what people review; the block under it says how one row is checked, using
+that row's values:
+
+````markdown
+2. **The discount depends on the customer and the order total**
+
+   | customer  | total | discount? |
+   |-----------|------:|----------:|
+   | new       |    40 |        0% |
+   | new       |   120 |        5% |
+   | returning |    40 |        5% |
+   | returning |   120 |       10% |
+
+   ```http
+   POST: "{{env.API}}/quotes"
+   json: { customer: "{{row.customer}}", total: {{row.total}} }
+   expect:
+     json:
+       $.discount: "{{row.discount}}"
+   ```
+````
+
+After a run, the report shows the same table with each row's result. If the
+app gave returning customers 5% on large orders, the last row would fail and
+say what came back:
+
+| customer  | total | discount? | result                 |
+|-----------|------:|----------:|------------------------|
+| new       |    40 |        0% | ✓ passed               |
+| new       |   120 |        5% | ✓ passed               |
+| returning |    40 |        5% | ✓ passed               |
+| returning |   120 |       10% | ✗ failed: got 5%       |
+
+Linked tables, for data with parts. The first table is named `orders`; the
+second links each line item to its order through its `orders` column:
+
+Table: orders
+
+| order | customer  | total? |
+|-------|-----------|-------:|
+| A     | new       |  52.50 |
+| B     | returning |  20.00 |
+
+Table: items
+
+| orders | item | qty | price |
+|--------|------|----:|------:|
+| A      | book |   1 | 40.00 |
+| A      | pen  |   5 |  2.50 |
+| B      | pen  |   8 |  2.50 |
+
+The step runs once per order. `{{row.items}}` is that order's items, so the
+request sends order A with its book and five pens, and checks the total
+against the `total?` column:
+
+```http
+POST: "{{env.API}}/orders"
+json: { customer: "{{row.customer}}", items: {{row.items}} }
+expect:
+  json:
+    $.total: "{{row.total}}"
+```
+
 ## Open questions
 
 - How should a column be marked as an expected value rather than an input?

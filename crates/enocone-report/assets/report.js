@@ -56,16 +56,50 @@
   function md(text) {
     const box = h("div", { class: "md" });
     const item = /^\s*([-*]|\d+\.)\s+/;
-    for (const block of String(text || "").split(/\n\s*\n/)) {
-      const lines = block.split("\n").filter((l) => l.trim());
-      if (!lines.length) continue;
-      if (item.test(lines[0])) {
+    const fence = /^(\s*)(`{3,}|~{3,})/;
+    const row = /^\s*\|.*\|\s*$/;
+    const rule = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+    const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+    const lines = String(text || "").split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (!l.trim()) { i++; continue; }
+      const f = l.match(fence);
+      if (f) {
+        // A fenced block, kept as written (it may itself contain fences, blank lines or tables).
+        const [, indent, mark] = f;
+        const body = [];
+        i++;
+        while (i < lines.length && !(lines[i].trim().startsWith(mark[0].repeat(mark.length)) && lines[i].trim().replace(/[`~]/g, "") === "")) {
+          body.push(lines[i].startsWith(indent) ? lines[i].slice(indent.length) : lines[i]);
+          i++;
+        }
+        i++;
+        box.append(h("pre", null, h("code", null, body.join("\n"))));
+        continue;
+      }
+      if (row.test(l) && i + 1 < lines.length && rule.test(lines[i + 1])) {
+        // A Markdown table: header, alignment rule, rows.
+        const align = cells(lines[i + 1]).map((c) => (c.endsWith(":") ? "num" : null));
+        const head = cells(l);
+        const body = [];
+        i += 2;
+        while (i < lines.length && row.test(lines[i])) body.push(cells(lines[i++]));
+        box.append(h("table", null,
+          h("thead", null, h("tr", null, head.map((c, j) => h("th", { class: align[j] }, inline(c))))),
+          h("tbody", null, body.map((r) => h("tr", null, head.map((_, j) => h("td", { class: align[j] }, inline(r[j] || ""))))))));
+        continue;
+      }
+      const block = [];
+      while (i < lines.length && lines[i].trim() && !fence.test(lines[i]) && !(row.test(lines[i]) && rule.test(lines[i + 1] || ""))) block.push(lines[i++]);
+      if (item.test(block[0])) {
         // List items may wrap onto following lines.
         const items = [];
-        for (const l of lines) { if (item.test(l)) items.push(l.replace(item, "")); else items[items.length - 1] += " " + l.trim(); }
-        box.append(h(/^\s*\d+\./.test(lines[0]) ? "ol" : "ul", null, items.map((t) => h("li", null, inline(t)))));
+        for (const b of block) { if (item.test(b)) items.push(b.replace(item, "")); else items[items.length - 1] += " " + b.trim(); }
+        box.append(h(/^\s*\d+\./.test(block[0]) ? "ol" : "ul", null, items.map((t) => h("li", null, inline(t)))));
       } else {
-        box.append(h("p", null, inline(lines.join(" "))));
+        box.append(h("p", null, inline(block.map((b) => b.trim()).join(" "))));
       }
     }
     return box;

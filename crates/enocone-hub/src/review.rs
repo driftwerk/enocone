@@ -24,7 +24,7 @@ pub fn md(src: &str) -> String {
         let l = u.to_ascii_lowercase();
         l.starts_with("http://") || l.starts_with("https://") || l.starts_with("mailto:") || l.starts_with('#') || l.starts_with('/')
     };
-    let events = Parser::new(src).map(|e| match e {
+    let events = Parser::new_ext(src, pulldown_cmark::Options::ENABLE_TABLES).map(|e| match e {
         Event::Html(h) | Event::InlineHtml(h) => Event::Text(h),
         Event::Start(Tag::Link { link_type, dest_url, title, id }) if !safe(&dest_url) => Event::Start(Tag::Link { link_type, dest_url: CowStr::from("#"), title, id }),
         Event::Start(Tag::Image { dest_url, .. }) => Event::Text(dest_url),
@@ -312,6 +312,12 @@ pub async fn resolve(State(app): State<App>, h: HeaderMap, Path((slug, id)): Pat
 #[cfg(test)]
 mod tests {
     use super::md;
+
+    #[test]
+    fn markdown_tables_render() {
+        let html = md("| customer | discount? |\n|---|---:|\n| new | 5% |\n");
+        assert!(html.contains("<table>") && html.contains("<th>customer</th>") && html.contains(">5%</td>"), "{html}");
+    }
 
     #[test]
     fn markdown_is_safe() {
