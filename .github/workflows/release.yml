@@ -78,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
-      - name: Move the major-version tag (what `uses: driftwerk/enocone@v0` follows)
+      - name: "Move the major-version tag (what `uses: driftwerk/enocone@v0` follows)"
         run: |
           version=${GITHUB_REF_NAME#v}
           major=v${version%%.*}
