@@ -36,22 +36,17 @@ flowchart LR
 - Commenting, resolving, publishing and managing members still need an
   invitation, as today. Signed-out visitors see "Sign in to comment" where
   the comment form would be, and the API refuses them.
+- Public projects are reached by link; the home page doesn't list them.
+- Reviewers' comments are shown to visitors on a public project: the owner
+  chose to make its review public.
+- For a public project, the MCP server's `review_comments` and the comments
+  API work without signing in.
 - A private project still answers "not found" to anyone who isn't a member,
   so its name isn't revealed.
 - A public project shows a "Public" badge on its pages. An owner can make it
   private again at any time; from then on visitors get "not found".
 - Public pages carry the same security headers as every other page, and
   can be found by search engines unless the owner turns that off.
-
-## Open questions
-
-- Should the home page list a site's public projects ("open-source projects
-  on this site"), or should they be reachable only by link?
-- Should reviewers' comments be shown to visitors on public projects, or
-  only the flows and runs? Comments may hold discussion a team wouldn't
-  expect strangers to read.
-- Should the MCP server's `review_comments` work without signing in for a
-  public project?
 
 ## Given
 

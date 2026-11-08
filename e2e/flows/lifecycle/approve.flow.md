@@ -41,12 +41,9 @@ flowchart LR
   `enocone list --stage draft` is what's waiting for review.
 - The MCP server has no tool for approving or changing stage. Its guide
   says to ask the person to run `enocone approve` themselves.
-
-## Open questions
-
-- Should `approve` also record the approver's email, or is the name enough?
-- Should there be an `enocone approve --all-drafts` for a review meeting
-  where several flows are agreed at once, or is listing them enough?
+- The approval records the person's name only, not their email.
+- Flows are approved one by one or by naming several; there is no "approve
+  every draft" option.
 
 ## Given
 
