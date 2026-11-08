@@ -3,6 +3,7 @@
 
 use enocone_mcp::hub;
 mod init;
+mod stage;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -72,7 +73,30 @@ enum Cmd {
         open: bool,
     },
     /// List flows with their stage and status of implementation.
-    List { paths: Vec<PathBuf> },
+    List {
+        paths: Vec<PathBuf>,
+        /// Only flows at this stage (draft, review, approved, implemented).
+        #[arg(long)]
+        stage: Option<String>,
+    },
+    /// Approve flows: sets `stage: approved` and `approved_by: <your name> (<date>)`. Doesn't commit.
+    Approve {
+        /// Flow ids (as `enocone list` shows them) or paths.
+        #[arg(required = true)]
+        flows: Vec<String>,
+        /// The name to record (default: `git config user.name`).
+        #[arg(long)]
+        by: Option<String>,
+    },
+    /// Move a flow to a stage: draft, review, approved or implemented. Doesn't commit.
+    Stage {
+        /// A flow id or path.
+        flow: String,
+        stage: String,
+        /// For approved: the name to record (default: `git config user.name`).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Start the MCP server on stdio (for Claude Code, Claude Desktop, Cursor…).
     Mcp,
     /// Create enocone.toml, an example flow and agent config in this directory.
@@ -493,11 +517,31 @@ async fn real_main(cli: Cli) -> anyhow::Result<i32> {
             }
             Ok(if diags.iter().any(|(_, d)| d.severity == Severity::Error) { 2 } else { 0 })
         }
-        Cmd::List { paths } => {
+        Cmd::Approve { flows, by } => {
+            let project = load_project(&cli)?;
+            change_stage(&project, flows, enocone_spec::Stage::Approved, by.as_deref())
+        }
+        Cmd::Stage { flow, stage, by } => {
+            let project = load_project(&cli)?;
+            let Some(st) = enocone_spec::Stage::parse(stage) else {
+                eprintln!("error: unknown stage `{stage}`: use draft, review, approved or implemented");
+                return Ok(2);
+            };
+            change_stage(&project, std::slice::from_ref(flow), st, by.as_deref())
+        }
+        Cmd::List { paths, stage } => {
             let project = load_project(&cli)?;
             let (flows, diags) = project.load_flows(paths)?;
             print_diags(&diags.into_iter().filter(|(_, d)| d.severity == Severity::Error).collect::<Vec<_>>(), &c);
-            for f in flows {
+            let only = match stage.as_deref().map(|s| (s, enocone_spec::Stage::parse(s))) {
+                Some((s, None)) => {
+                    eprintln!("error: unknown stage `{s}`: use draft, review, approved or implemented");
+                    return Ok(2);
+                }
+                Some((_, st)) => st,
+                None => None,
+            };
+            for f in flows.into_iter().filter(|f| only.is_none_or(|s| f.meta.stage == s)) {
                 let total = f.steps().count();
                 let todo = f.unimplemented_steps();
                 let impl_state = if todo == 0 { c.green(&format!("{total}/{total} steps implemented")) } else { c.purple(&format!("{}/{total} steps implemented", total - todo)) };
@@ -630,4 +674,75 @@ async fn real_main(cli: Cli) -> anyhow::Result<i32> {
             Ok(out.results.exit_code(a.fail_on_pending))
         }
     }
+}
+
+/// Set the stage of each named flow (by id or path). Refuses, changing nothing, if any can't be done.
+fn change_stage(project: &enocone_engine::Project, names: &[String], stage: enocone_spec::Stage, by: Option<&str>) -> anyhow::Result<i32> {
+    use enocone_spec::Stage;
+    let (flows, _) = project.load_flows(&[])?;
+    let mut picked = Vec::new();
+    for name in names {
+        let as_path = std::path::Path::new(name);
+        let rel_cwd = as_path.exists().then(|| project.rel(as_path));
+        let found = flows.iter().find(|f| f.id == *name || f.path == *name || rel_cwd.as_deref() == Some(f.path.as_str()));
+        match found {
+            Some(f) => picked.push(f),
+            None => {
+                eprintln!("error: no flow `{name}`: use an id from `enocone list`, or a path to a .flow.md");
+                return Ok(1);
+            }
+        }
+    }
+    let approval = if stage == Stage::Approved {
+        let name = match by {
+            Some(n) => n.trim().to_string(),
+            None => std::process::Command::new("git")
+                .args(["config", "user.name"])
+                .current_dir(&project.root)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default(),
+        };
+        if name.is_empty() {
+            eprintln!("error: no name to record as approver: set `git config user.name`, or pass --by \"Your Name\"");
+            return Ok(1);
+        }
+        Some(format!("{name} ({})", chrono::Local::now().format("%Y-%m-%d")))
+    } else {
+        None
+    };
+    if stage == Stage::Implemented {
+        for f in &picked {
+            let todo = f.unimplemented_steps();
+            if todo > 0 {
+                let total = f.steps().count();
+                eprintln!("error: {} can't be implemented yet: {}/{total} steps implemented", f.id, total - todo);
+                return Ok(1);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    for f in &picked {
+        let file = project.root.join(&f.path);
+        let text = std::fs::read_to_string(&file)?;
+        let new = stage::set_stage(&text, stage, approval.as_deref());
+        if new != text {
+            std::fs::write(&file, new)?;
+        }
+        let was = f.meta.stage.as_str();
+        match &approval {
+            Some(a) => println!("{}: {was} → {}, approved_by: {a}", f.id, stage.as_str()),
+            None => println!("{}: {was} → {}", f.id, stage.as_str()),
+        }
+        paths.push(f.path.clone());
+    }
+    let verb = match stage {
+        Stage::Approved => "Approve",
+        _ => "Move to stage",
+    };
+    let what = picked.iter().map(|f| f.id.as_str()).collect::<Vec<_>>().join(", ");
+    let msg = if stage == Stage::Approved { format!("{verb} {what}") } else { format!("{verb} {}: {what}", stage.as_str()) };
+    println!("\nNothing is committed. To record it:\n  git commit -m \"{msg}\" {}", paths.join(" "));
+    Ok(0)
 }

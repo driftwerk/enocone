@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """call.py BIN PROJECT TOOL [ARGS_JSON]: call one tool of `enocone mcp`, as an AI tool would.
 
+With TOOL `--list`, prints the names of the tools the server offers, one per line.
+
 Starts `BIN --project PROJECT mcp`, does the MCP handshake over stdio, calls
 TOOL with ARGS_JSON (default {}), and prints the text the tool returned.
 Tools that answer in JSON print JSON, so a flow can check it with `json:`.
@@ -39,6 +41,11 @@ def main() -> int:
             "clientInfo": {"name": "enocone-e2e", "version": "1"}}})
         reply(1)
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        if tool == "--list":
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+            res = reply(2)
+            print("\n".join(t["name"] for t in res.get("result", {}).get("tools", [])))
+            return 0
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": args}})
         res = reply(2)
     finally:

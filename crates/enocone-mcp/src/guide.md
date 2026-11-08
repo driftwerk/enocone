@@ -31,6 +31,9 @@ Two ways in:
   what the system does *today*. Mark anything surprising in `## Open questions`.
 
 Never set `approved` yourself: that is the human sign-off (`approved_by:`).
+When drafts are ready, ask the person to approve them themselves with
+`enocone approve <flow id>` (it records their name and the date, and they
+commit it); `enocone list --stage draft` shows what's waiting.
 
 ## Shape
 

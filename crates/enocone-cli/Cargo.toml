@@ -18,6 +18,7 @@ enocone-report.workspace = true
 enocone-mcp.workspace = true
 enocone-hub.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 base64.workspace = true
 reqwest.workspace = true
 serde.workspace = true

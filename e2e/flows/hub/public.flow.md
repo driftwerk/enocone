@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, visibility, open-source]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-08)
 ---
 
 # An owner makes an open-source project public, so anyone can read its flows and runs
