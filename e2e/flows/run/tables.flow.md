@@ -205,6 +205,7 @@ expect:
 
 7. **Sam comments on one row on the team site, and the comment stays on that row after another row changes**
    ```exec
+   # Start a test site with Priya and Sam on the shop project
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18189 "{{run.tmp}}/site" >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18189 "{{run.tmp}}/site" project:shop:Shop "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "token:priya+{{run.short_id}}@example.test" "link:sam+{{run.short_id}}@example.test"
@@ -214,12 +215,14 @@ expect:
      sam_link: { regex: "(http://\\S+/auth/email\\?token=\\w+)" }
    ```
    ```exec
+   # Publish the run to the test site
    run: |
      printf '\n[hub]\nurl = "http://127.0.0.1:18189"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
      env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN ENOCONE_HUB_TOKEN="{{priya_token}}" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish "{{run.tmp}}/out/results.json"
    expect: { stdout: "/shop/runs/" }
    ```
    ```browser
+   # Sam comments on the row "returning, 120"
    - goto: "{{sam_link}}"
    - click: Sign in to
    - goto: "http://127.0.0.1:18189/shop/review/pricing.discount"
@@ -230,6 +233,7 @@ expect:
    - expect: "Step 1, row: returning, 120"
    ```
    ```exec
+   # Change another row (new, 40 → 50), run and publish again
    run: |
      sed -i.bak 's/| new       |    40 |        0% |/| new       |    50 |        0% |/' "{{run.tmp}}/p/flows/pricing/discount.flow.md"
      grep -c "|    50 |" "{{run.tmp}}/p/flows/pricing/discount.flow.md"
@@ -238,6 +242,7 @@ expect:
    expect: { stdout: { matches: "^1\\n(?s).*/shop/runs/" } }
    ```
    ```browser
+   # The comment is still on its row, not outdated
    - goto: "http://127.0.0.1:18189/shop/review/pricing.discount"
    - expect: { role: cell, name: "50" }
    - expect: "15% was the old rate"
@@ -246,6 +251,7 @@ expect:
    - screenshot
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18189
    ```

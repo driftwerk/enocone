@@ -142,7 +142,13 @@ section.sec h2 { margin: 0 0 4px; font-size: 13px; font-weight: 700; letter-spac
 .shead { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
 .intent { flex: 1 1 340px; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.45; }
 .intent .n { color: var(--muted); font-weight: 500; margin-right: 4px; }
-.how { align-self: flex-start; display: flex; align-items: center; gap: 8px; background: transparent; border: 0; padding: 3px 0; font-size: 13px; color: var(--muted); cursor: pointer; min-height: 30px; text-align: left; }
+.how { align-self: stretch; display: flex; align-items: flex-start; gap: 8px; background: transparent; border: 0; padding: 3px 0; font-size: 13px; color: var(--muted); cursor: pointer; min-height: 30px; text-align: left; min-width: 0; max-width: 100%; }
+.how .how-list { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.how .how-t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 22px; }
+.how svg { flex: none; margin-top: 4px; }
+.blk { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.blk-t { font-size: 13px; color: var(--ink-2); }
+.blk-t .k { font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--accent); }
 .how .k { font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--accent); }
 .note { font-size: 13px; color: var(--muted); }
 .note.pend { color: var(--pend-fg); }

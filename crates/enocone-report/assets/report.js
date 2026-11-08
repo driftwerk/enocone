@@ -506,8 +506,25 @@
   }
 
   // ---------------------------------------------------------------- flow document
+  // Template noise shortened for one-line summaries.
+  const tidy = (t) => t
+    .replace(/"?\{\{\s*env\.ENOCONE_BIN\s*\}\}"?/g, "enocone")
+    .replace(/\{\{\s*env\.FIXTURES\s*\}\}/g, "fixtures")
+    .replace(/\{\{\s*run\.tmp\s*\}\}/g, "tmp")
+    .replace(/\{\{\s*env\.(\w+)\s*\}\}/g, "$1")
+    .replace(/"/g, "");
+
+  // A block's one-line title: its own `# comment` on the first line, else a summary.
+  function blockTitle(b) {
+    const lines = (b.source || "").split("\n").map((l) => l.trim());
+    const own = lines.find((l) => l);
+    if (own && own.startsWith("#")) return own.replace(/^#+\s*/, "");
+    const t = blockSummary(b);
+    return t.length > 80 ? t.slice(0, 79) + "…" : t;
+  }
+
   function blockSummary(b) {
-    const first = (b.source || "").split("\n").map((l) => l.trim()).filter(Boolean);
+    const first = (b.source || "").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
     if (b.kind === "http") {
       const m = first.find((l) => /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*:/i.test(l)) || first[0] || "";
       const auth = first.find((l) => /^auth\s*:/.test(l));
@@ -523,14 +540,35 @@
     if (b.kind === "exec") {
       const i = first.findIndex((l) => /^run\s*:/.test(l));
       let cmd = i < 0 ? first[0] || "" : first[i].replace(/^run\s*:\s*/, "");
-      if (/^[|>][-+]?$/.test(cmd)) cmd = first[i + 1] || "";
+      let more = 0;
+      if (/^[|>][-+]?$/.test(cmd)) {
+        // A script: its first command, or the comment that says what it does.
+        const script = [];
+        for (const l of (b.source || "").split("\n").slice((b.source || "").split("\n").findIndex((x) => /^\s*run\s*:/.test(x)) + 1)) {
+          if (/^\S/.test(l)) break;
+          if (l.trim()) script.push(l.trim());
+        }
+        const note = script.find((l) => l.startsWith("#"));
+        if (note) return note.replace(/^#+\s*/, "");
+        const cmds = script.filter((l) => !l.startsWith("#"));
+        cmd = cmds[0] || "";
+        more = cmds.length - 1;
+      }
       if (cmd.startsWith("- ")) cmd = first.slice(i + 1).filter((l) => l.startsWith("- ")).map((l) => l.slice(2)).join(" ");
-      return "$ " + cmd.replace(/^"|"$/g, "").slice(0, 110);
+      // Drop leading VAR=value settings so the command itself shows.
+      cmd = tidy(cmd).replace(/^(\w+=("[^"]*"|'[^']*'|\S*)\s+)+/, "").replace(/^env(\s+-u\s+\S+)*\s+(\w+=\S+\s+)*/, "")
+        .replace(/\s*\d?>+\s*\/dev\/null/g, "").replace(/\s*2>&1/g, "").trim();
+      return "$ " + cmd + (more > 0 ? `  (+${more} more)` : "");
     }
-    const acts = first.filter((l) => l.startsWith("- ")).map((l) => l.slice(2).split(":")[0]);
+    const acts = first.filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
     const as = first.find((l) => /^as\s*:/.test(l));
     if (b.kind === "expect") return first.join(" ").slice(0, 120);
-    return (as ? `as ${as.split(":")[1].trim()} · ` : "") + (acts.length ? acts.join(", ") : first.join(" ").slice(0, 100));
+    if (!acts.length) return first.join(" ").slice(0, 100);
+    // Where it goes, and how much it does there.
+    const go = acts.find((a) => a.startsWith("goto:"));
+    let where = go ? tidy(go.replace(/^goto:\s*/, "")) : acts[0].split(":")[0];
+    where = where.replace(/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/, "").replace(/^\{\{[^}]+\}\}$/, "a link");
+    return (as ? `as ${as.split(":")[1].trim()} · ` : "") + (go ? `goto ${where}` : where) + (acts.length > 1 ? ` · ${acts.length} actions` : "");
   }
 
   function happened(r) {
@@ -606,7 +644,9 @@
     const fill = () => {
       detail.replaceChildren();
       const cols = h("div", { class: "details" },
-        h("div", null, h("div", { class: "lbl" }, "As written"), s.blocks.map((b) => h("pre", { class: "code" }, "```" + b.kind + "\n" + b.source + "\n```"))));
+        h("div", null, h("div", { class: "lbl" }, "As written"), s.blocks.map((b) => h("div", { class: "blk" },
+          h("div", { class: "blk-t" }, h("span", { class: "k" }, b.kind), " ", blockTitle(b)),
+          h("pre", { class: "code" }, b.source)))));
       if (r && (r.records || []).length) cols.append(h("div", null, h("div", { class: "lbl" }, "What happened"), h("pre", { class: "term" }, happened(r))));
       detail.append(cols);
       if (r && r.snapshot) detail.append(h("details", null, h("summary", { class: "small" }, "Accessibility snapshot of the page at failure"), h("pre", { class: "code" }, r.snapshot)));
@@ -618,7 +658,8 @@
       btn.setAttribute("aria-expanded", isOpen ? "false" : "true");
       if (!isOpen && !detail.childNodes.length) fill();
       detail.style.display = isOpen ? "none" : "";
-    } }, svg(ICON.chev, 14, "chev"), s.blocks.map((b, i) => [i ? " + " : null, h("span", { class: "k" }, b.kind), " ", blockSummary(b)])) : null;
+    } }, svg(ICON.chev, 14, "chev"), h("span", { class: "how-list" },
+      s.blocks.map((b) => h("span", { class: "how-t" }, h("span", { class: "k" }, b.kind), " ", blockTitle(b))))) : null;
     const children = r && (r.children || []).length ? h("div", { class: "children" }, r.children.map((c) => {
       const cr = c.result;
       return h("div", { class: `step is-${cr.status}` }, h("span", { class: `mark m-${cr.status}` }, cr.status === "passed" ? svg(ICON.check, 11) : cr.status === "failed" ? svg(ICON.x, 11) : "–"),
@@ -635,12 +676,12 @@
         stepDesigns(s, r),
         !s.blocks.length && !opts.designing ? h("div", { class: "note pend" }, "Not implemented yet. This step describes agreed behaviour; an http, browser, expect, use, exec or email block will make it executable.") : null,
         how,
+        detail,
         r && r.error ? h("div", { class: "err" }, r.error.message) : null,
         r && r.note && status !== "passed" && s.blocks.length ? h("div", { class: "note" }, r.note) : null,
         children,
         r && r.screenshot && !(s.designs || []).some((d) => d.screen) ? h("figure", { class: "shot" }, h("img", { src: r.screenshot, alt: `Screenshot after: ${s.intent}`, loading: "lazy", onclick: (e) => zoom(e.target.src) }),
-          h("figcaption", { class: "small" }, "Screenshot after this step", r.page_url ? ` · ${r.page_url}` : "")) : null,
-        detail), notes);
+          h("figcaption", { class: "small" }, "Screenshot after this step", r.page_url ? ` · ${r.page_url}` : "")) : null), notes);
   }
 
   // A step's tables of examples: the first with each row's result, then any linked tables.
