@@ -40,9 +40,70 @@ fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn step_hash(flow: &Flow, key: &str) -> Option<String> {
-    let step = flow.sections.iter().flat_map(|s| &s.steps).find(|s| s.key == key)?;
-    Some(Sha256::digest(squash(&step.intent).as_bytes()).iter().map(|b| format!("{b:02x}")).collect())
+/// A comment's anchor: a step's key, or `<key>#row=<the row's inputs>` for one
+/// row of the step's table of examples.
+fn split_anchor(anchor: &str) -> (&str, Option<&str>) {
+    match anchor.split_once("#row=") {
+        Some((k, row)) => (k, Some(row)),
+        None => (anchor, None),
+    }
+}
+
+fn find_step<'a>(flow: &'a Flow, key: &str) -> Option<&'a enocone_spec::Step> {
+    flow.sections.iter().flat_map(|s| &s.steps).find(|s| s.key == key)
+}
+
+/// The index of the driving table's row with these inputs.
+fn find_row(step: &enocone_spec::Step, label: &str) -> Option<usize> {
+    (0..step.tables.first()?.rows.len()).find(|&i| step.row_label(i) == label)
+}
+
+/// What a comment was written against: the step's sentence, or for a row, that
+/// row's cells. When it changes, the comment shows as outdated; other rows
+/// changing doesn't touch it.
+fn step_hash(flow: &Flow, anchor: &str) -> Option<String> {
+    let (key, row) = split_anchor(anchor);
+    let step = find_step(flow, key)?;
+    let text = match row {
+        None => squash(&step.intent),
+        Some(label) => {
+            let i = find_row(step, label)?;
+            step.tables[0].rows[i].cells.iter().map(|c| squash(c)).collect::<Vec<_>>().join("\u{1f}")
+        }
+    };
+    Some(Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A step's tables, for the review page.
+fn tables_html(step: &enocone_spec::Step, open_on_row: impl Fn(&str) -> usize) -> String {
+    let mut out = String::new();
+    for (ti, t) in step.tables.iter().enumerate() {
+        if let Some(name) = &t.name {
+            out.push_str(&format!(r#"<div class="small muted" style="margin-top:8px">Table: {}</div>"#, esc(name)));
+        }
+        out.push_str(r#"<div class="md"><table><thead><tr>"#);
+        for (ci, c) in t.columns.iter().enumerate() {
+            if t.link != Some(ci) {
+                out.push_str(&format!("<th>{}</th>", esc(&c.header)));
+            }
+        }
+        out.push_str("</tr></thead><tbody>");
+        for (ri, r) in t.rows.iter().enumerate() {
+            let n = if ti == 0 { open_on_row(&step.row_label(ri)) } else { 0 };
+            out.push_str("<tr>");
+            for (ci, cell) in r.cells.iter().enumerate() {
+                if t.link != Some(ci) {
+                    out.push_str(&format!("<td>{}</td>", esc(cell)));
+                }
+            }
+            if n > 0 {
+                out.push_str(&format!(r#"<td style="border:none"><span class="pill amber">{n} open</span></td>"#));
+            }
+            out.push_str("</tr>");
+        }
+        out.push_str("</tbody></table></div>");
+    }
+    out
 }
 
 fn load_flow(app: &App, project: &Project, flow_id: &str) -> Result<Flow, Fail> {
@@ -80,8 +141,21 @@ fn outdated(flow: &Flow, c: &Comment) -> bool {
 }
 
 fn anchor_label(flow: &Flow, step: Option<&str>) -> String {
-    match step.and_then(|k| flow.sections.iter().flat_map(|s| &s.steps).find(|s| s.key == k)) {
-        Some(s) => format!("Step {}", s.number.map(|n| n.to_string()).unwrap_or_else(|| s.key.clone())),
+    let (key, row) = match step {
+        Some(a) => {
+            let (k, r) = split_anchor(a);
+            (Some(k), r)
+        }
+        None => (None, None),
+    };
+    match key.and_then(|k| find_step(flow, k)) {
+        Some(s) => {
+            let n = s.number.map(|n| n.to_string()).unwrap_or_else(|| s.key.clone());
+            match row {
+                Some(r) => format!("Step {n}, row: {r}"),
+                None => format!("Step {n}"),
+            }
+        }
         None if step.is_some() => "A step that was removed".into(),
         None => "The whole flow".into(),
     }
@@ -158,15 +232,23 @@ pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, 
         ));
         for s in &sec.steps {
             let n = s.number.map(|n| n.to_string()).unwrap_or_default();
-            let count = top.iter().filter(|c| !c.resolved && c.step.as_deref() == Some(s.key.as_str())).count();
+            let count = top.iter().filter(|c| !c.resolved && c.step.as_deref().map(|a| split_anchor(a).0) == Some(s.key.as_str())).count();
+            let row_count = |label: &str| top.iter().filter(|c| !c.resolved && c.step.as_deref().map(split_anchor) == Some((s.key.as_str(), Some(label)))).count();
+            let tables = tables_html(s, row_count);
             doc.push_str(&format!(
-                r#"<li id="step-{key}" style="display:flex;gap:12px"><span style="width:26px;height:26px;border-radius:50%;border:2px dashed var(--iris2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--iris);flex:none">{n}</span><div><b>{intent}</b>{count}{notes}</div></li>"#,
+                r#"<li id="step-{key}" style="display:flex;gap:12px"><span style="width:26px;height:26px;border-radius:50%;border:2px dashed var(--iris2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--iris);flex:none">{n}</span><div style="min-width:0"><b>{intent}</b>{count}{notes}{tables}</div></li>"#,
                 key = esc(&s.key),
                 intent = esc(&s.intent),
                 count = if count > 0 { format!(r#" <span class="pill amber">{count} open</span>"#) } else { String::new() },
                 notes = if s.notes.trim().is_empty() { String::new() } else { format!(r#"<div class="md small">{}</div>"#, md(&s.notes)) },
             ));
             options.push_str(&format!(r#"<option value="{}">Step {n}: {}</option>"#, esc(&s.key), esc(&s.intent.chars().take(60).collect::<String>())));
+            if let Some(t) = s.tables.first() {
+                for i in 0..t.rows.len() {
+                    let label = s.row_label(i);
+                    options.push_str(&format!(r#"<option value="{}#row={}">Step {n}, row: {}</option>"#, esc(&s.key), esc(&label), esc(&label)));
+                }
+            }
         }
         doc.push_str("</ol>");
     }
@@ -235,9 +317,18 @@ pub async fn api_comments(State(app): State<App>, h: HeaderMap, Path((slug, flow
     let Ok(flow) = load_flow(&app, &project, &flow_id) else { return Ok(crate::runs::api_error(StatusCode::NOT_FOUND, "No such flow on this project; publish a run that includes it first.")) };
     let all = comments(&app, &project, &flow_id)?;
     let step_of = |k: Option<&str>| {
-        k.map(|k| match flow.sections.iter().flat_map(|s| &s.steps).find(|s| s.key == k) {
-            Some(s) => json!({ "key": s.key, "number": s.number, "intent": s.intent }),
-            None => json!({ "key": k, "removed": true }),
+        k.map(|a| {
+            let (k, row) = split_anchor(a);
+            match find_step(&flow, k) {
+                Some(s) => {
+                    let mut v = json!({ "key": s.key, "number": s.number, "intent": s.intent });
+                    if let Some(r) = row {
+                        v["row"] = json!(r);
+                    }
+                    v
+                }
+                None => json!({ "key": k, "removed": true }),
+            }
         })
     };
     let one = |c: &Comment| json!({ "id": c.id, "author": c.author, "text": c.text, "created_at": c.at });

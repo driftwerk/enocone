@@ -306,3 +306,21 @@ header.top .crumbs a:hover { background: rgba(185,172,255,.2); }
 .md td.num, .md th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .md pre { background: var(--code); border: 1px solid var(--line-2); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0 0 14px; font-size: 13px; line-height: 1.5; }
 .md pre code { background: none; padding: 0; }
+
+/* Tables of examples in a step */
+.xtables { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 4px; }
+.xtable table { border-collapse: collapse; font-size: 13.5px; display: block; overflow-x: auto; max-width: 100%; }
+.xtable th, .xtable td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; font-variant-numeric: tabular-nums; }
+.xtable th { background: var(--sunken); font-weight: 600; }
+.xtable th.exp, .xtable td.exp { background: var(--accent-soft); }
+.xtable tr.r-passed td.res { color: var(--pass-fg); }
+.xtable tr.r-failed td { background: var(--fail-soft); }
+.xtable tr.r-failed td.res { color: var(--fail-fg); font-weight: 600; }
+.xtable td.bad { box-shadow: inset 0 0 0 2px var(--fail); }
+.xtable td.bad .got { color: var(--fail-fg); font-weight: 600; }
+.xtable td.res { white-space: nowrap; }
+.xtable td.res svg { vertical-align: -2px; }
+.xtable tr.clickable { cursor: pointer; }
+.xtable tr.clickable:hover td { filter: brightness(0.97); }
+.xtable tr.rdetail td { background: var(--surface); }
+.xtable .tname { margin-bottom: 4px; }

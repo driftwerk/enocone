@@ -168,8 +168,126 @@ pub struct Step {
     /// Mockups and diagrams for this step (documentation; never executed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub designs: Vec<crate::design::Design>,
+    /// Tables of examples. The first drives the step: its blocks run once per
+    /// row. Any others are linked to it (one level: orders → items).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<Table>,
     /// 1-based line of the step in the source.
     pub line: usize,
+}
+
+/// A Markdown table of examples in a step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Table {
+    /// From a `Table: <name>` line just above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub columns: Vec<Column>,
+    pub rows: Vec<TableRow>,
+    /// For a linked table: the index of the column holding the driving row's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<usize>,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Column {
+    /// As written, e.g. `Discount?`.
+    pub header: String,
+    /// How blocks refer to it: `{{row.discount}}`.
+    pub key: String,
+    /// The header ends in `?`: an expected result rather than an input.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableRow {
+    pub cells: Vec<String>,
+    pub line: usize,
+}
+
+impl Column {
+    pub fn new(header: &str) -> Column {
+        let h = header.trim();
+        let expected = h.ends_with('?');
+        Column { header: h.to_string(), key: column_key(h.trim_end_matches('?')), expected }
+    }
+}
+
+/// `Order total` → `order_total`.
+pub fn column_key(header: &str) -> String {
+    let mut out = String::new();
+    for c in header.trim().chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+        } else if !out.ends_with('_') && !out.is_empty() {
+            out.push('_');
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// A cell as a value: whole numbers and decimals become numbers (so
+/// `"{{row.total}}"` sends 40, not "40"), `true`/`false` booleans, the rest text.
+pub fn cell_value(cell: &str) -> serde_json::Value {
+    let t = cell.trim();
+    let digits = t.strip_prefix('-').unwrap_or(t);
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let numeric = !int.is_empty() && int.chars().all(|c| c.is_ascii_digit()) && (int == "0" || !int.starts_with('0')) && frac.chars().all(|c| c.is_ascii_digit()) && !(digits.contains('.') && frac.is_empty());
+    if numeric {
+        if let Ok(n) = t.parse::<i64>() {
+            return n.into();
+        }
+        if let Some(n) = t.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    match t {
+        "true" => true.into(),
+        "false" => false.into(),
+        _ => serde_json::Value::String(t.to_string()),
+    }
+}
+
+impl Step {
+    /// The values `{{row.…}}` sees for row `i` of the driving table: each
+    /// column by its key, and each linked table's rows by the table's name.
+    pub fn row_value(&self, i: usize) -> Option<serde_json::Value> {
+        let driver = self.tables.first()?;
+        let row = driver.rows.get(i)?;
+        let mut m = serde_json::Map::new();
+        for (c, col) in driver.columns.iter().enumerate() {
+            m.insert(col.key.clone(), cell_value(row.cells.get(c).map(String::as_str).unwrap_or("")));
+        }
+        let id = row.cells.first().map(|s| s.trim()).unwrap_or("");
+        for t in &self.tables[1..] {
+            let (Some(name), Some(link)) = (&t.name, t.link) else { continue };
+            let items: Vec<serde_json::Value> = t
+                .rows
+                .iter()
+                .filter(|r| r.cells.get(link).map(|s| s.trim()) == Some(id))
+                .map(|r| {
+                    let mut o = serde_json::Map::new();
+                    for (c, col) in t.columns.iter().enumerate() {
+                        if c != link {
+                            o.insert(col.key.clone(), cell_value(r.cells.get(c).map(String::as_str).unwrap_or("")));
+                        }
+                    }
+                    serde_json::Value::Object(o)
+                })
+                .collect();
+            m.insert(column_key(name), serde_json::Value::Array(items));
+        }
+        Some(serde_json::Value::Object(m))
+    }
+
+    /// "returning, 120": the row's inputs, to name it in results.
+    pub fn row_label(&self, i: usize) -> String {
+        let Some(t) = self.tables.first() else { return String::new() };
+        let Some(r) = t.rows.get(i) else { return String::new() };
+        t.columns.iter().zip(&r.cells).filter(|(c, _)| !c.expected).map(|(_, v)| v.trim()).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(", ")
+    }
 }
 
 /// A fenced block as written. Interpreted (after templating) by [`crate::blocks`].
@@ -282,5 +400,45 @@ impl Flow {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn column_keys_and_expected_marks() {
+        let c = Column::new(" Order total? ");
+        assert_eq!((c.key.as_str(), c.expected, c.header.as_str()), ("order_total", true, "Order total?"));
+        assert_eq!(column_key("Customer type"), "customer_type");
+        assert_eq!(column_key("e-mail"), "e_mail");
+    }
+
+    #[test]
+    fn cells_become_typed_values() {
+        assert_eq!(cell_value("40"), json!(40));
+        assert_eq!(cell_value("-3"), json!(-3));
+        assert_eq!(cell_value("52.50"), json!(52.5));
+        assert_eq!(cell_value("true"), json!(true));
+        assert_eq!(cell_value("0%"), json!("0%"));
+        assert_eq!(cell_value("007"), json!("007"));
+        assert_eq!(cell_value("1."), json!("1."));
+        assert_eq!(cell_value(""), json!(""));
+    }
+
+    #[test]
+    fn rows_carry_their_linked_rows() {
+        let src = "---\nstage: implemented\n---\n\n# Totals\n\nWhy.\n\n## Then\n\n1. **Each order is checked**\n\n   Table: orders\n\n   | order | customer | total? |\n   |---|---|---|\n   | A | new | 52.50 |\n   | B | returning | 20 |\n\n   Table: items\n\n   | orders | item | qty |\n   |---|---|---|\n   | A | book | 1 |\n   | A | pen | 5 |\n   | B | pen | 8 |\n\n   ```http\n   POST: \"{{env.API}}/orders\"\n   json: { items: \"{{row.items}}\" }\n   expect: { json: { $.total: \"{{row.total}}\" } }\n   ```\n";
+        let parsed = crate::parse_flow("t.flow.md", src);
+        assert!(!parsed.has_errors(), "{:?}", parsed.diagnostics);
+        let flow = parsed.flow;
+        let step = &flow.sections[0].steps[0];
+        assert_eq!(step.tables.len(), 2);
+        assert!(!step.notes.contains("Table:"), "caption kept in notes: {}", step.notes);
+        assert_eq!(step.row_label(0), "A, new");
+        assert_eq!(step.row_value(0).unwrap(), json!({ "order": "A", "customer": "new", "total": 52.5, "items": [{ "item": "book", "qty": 1 }, { "item": "pen", "qty": 5 }] }));
+        assert_eq!(step.row_value(1).unwrap()["items"], json!([{ "item": "pen", "qty": 8 }]));
     }
 }

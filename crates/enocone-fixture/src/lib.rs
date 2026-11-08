@@ -94,6 +94,8 @@ pub fn app() -> Router {
         .route("/api/leads/{id}", get(get_lead))
         .route("/api/leads/{id}/close", post(close_lead))
         .route("/api/quotes", post(create_quote))
+        .route("/api/discount", post(discount))
+        .route("/api/orders", post(order_total))
         .route("/api/quotes/{id}/payment-status", get(payment_status))
         .route("/public/quotes/{id}/accept/{token}", get(accept_page).post(accept))
         .route("/public/quotes/{id}/pay", get(pay_page).post(pay))
@@ -562,4 +564,26 @@ async fn short_whoami(State(s): State<S>, h: HeaderMap) -> Response {
         Some(_) => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "token expired" }))).into_response(),
         None => unauthorised(),
     }
+}
+
+// ------------------------------------------------------------- tables of examples
+
+/// New customers get 5% off orders of 100 or more; returning customers 5%,
+/// or 10% from 100. For enocone's own tests of tables of examples.
+async fn discount(Json(b): Json<Value>) -> Json<Value> {
+    let returning = b["customer"].as_str() == Some("returning");
+    let total = b["total"].as_f64().unwrap_or(0.0);
+    let pct = match (returning, total >= 100.0) {
+        (false, false) => 0,
+        (false, true) | (true, false) => 5,
+        (true, true) => 10,
+    };
+    Json(json!({ "discount": format!("{pct}%") }))
+}
+
+/// The order's total: the sum of quantity × price over its items.
+async fn order_total(Json(b): Json<Value>) -> Json<Value> {
+    let items = b["items"].as_array().cloned().unwrap_or_default();
+    let total: f64 = items.iter().map(|i| i["qty"].as_f64().unwrap_or(0.0) * i["price"].as_f64().unwrap_or(0.0)).sum();
+    Json(json!({ "customer": b["customer"], "items": items.len(), "total": (total * 100.0).round() / 100.0 }))
 }

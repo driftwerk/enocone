@@ -164,6 +164,21 @@ pub struct StepResult {
     /// Steps of an included fragment (`use`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ChildStep>,
+    /// One result per row of the step's table of examples.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<RowResult>,
+}
+
+/// How one row of a table of examples went.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RowResult {
+    /// 1-based, in the table's order.
+    pub row: usize,
+    /// The row's inputs, e.g. "returning, 120".
+    pub label: String,
+    /// Its line in the flow file.
+    pub line: usize,
+    pub result: StepResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

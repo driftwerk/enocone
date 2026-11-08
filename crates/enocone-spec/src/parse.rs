@@ -6,12 +6,12 @@
 //! info string `http`, `browser`, `expect` or `use` beneath it are the
 //! machine part.
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::design::{Design, DesignKind, parse_chart, parse_screen, parse_storyboard};
-use crate::model::{BlockKind, Flow, FlowMeta, NoteSection, RawBlock, Section, SectionKind, Stage, Step, slug};
+use crate::model::{BlockKind, Column, Flow, FlowMeta, NoteSection, RawBlock, Section, SectionKind, Stage, Step, Table, TableRow, column_key, slug};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Diagnostic {
@@ -332,7 +332,19 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
         notes: String,
         blocks: Vec<RawBlock>,
         designs: Vec<Design>,
+        tables: Vec<Table>,
     }
+    /// A table being read: its header, rows, and the cell in progress.
+    struct TableBuild {
+        name: Option<String>,
+        line: usize,
+        header: Vec<String>,
+        rows: Vec<TableRow>,
+        row: Vec<String>,
+        row_line: usize,
+        cell: String,
+    }
+    let mut table: Option<TableBuild> = None;
     let mut pending: Option<Pending> = None;
     let mut flow_designs: Vec<Design> = Vec::new();
     let mut used_keys: std::collections::HashMap<String, usize> = Default::default();
@@ -362,7 +374,8 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
             number += 1;
             Some(number)
         };
-        let step = Step { key, number: num, intent, notes: p.notes.trim().to_string(), blocks: p.blocks, designs: p.designs, line: p.line };
+        let tables = check_tables(p.tables, &p.blocks, diags);
+        let step = Step { key, number: num, intent, notes: p.notes.trim().to_string(), blocks: p.blocks, designs: p.designs, tables, line: p.line };
         match sections.last_mut() {
             Some(s) if s.kind == kind => s.steps.push(step),
             _ => sections.push(Section { kind, steps: vec![step] }),
@@ -371,7 +384,71 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
 
     let section_kind = |cur: &Option<Option<SectionKind>>| -> Option<SectionKind> { cur.and_then(|k| k) };
 
-    for (event, range) in Parser::new(body).into_offset_iter() {
+    for (event, range) in Parser::new_ext(body, Options::ENABLE_TABLES).into_offset_iter() {
+        // Tables of examples under a step (tables elsewhere are only documentation).
+        if table.is_some() || matches!(event, Event::Start(Tag::Table(_))) {
+            match &event {
+                Event::Start(Tag::Table(_)) => {
+                    let mut name = None;
+                    if let Some(p) = pending.as_mut() {
+                        // A `Table: orders` line just above names it.
+                        let t = p.notes.trim_end();
+                        if let Some(i) = t.rfind("Table:") {
+                            let rest = t[i + "Table:".len()..].trim();
+                            if !rest.is_empty() && !rest.contains(char::is_whitespace) && (i == 0 || t[..i].ends_with(' ')) {
+                                name = Some(rest.to_string());
+                                p.notes.truncate(i);
+                            }
+                        }
+                        p.intent_done = true;
+                    }
+                    table = Some(TableBuild { name, line: line_of(range.start), header: vec![], rows: vec![], row: vec![], row_line: 0, cell: String::new() });
+                }
+                Event::Start(Tag::TableRow) | Event::Start(Tag::TableHead) => {
+                    if let Some(t) = table.as_mut() {
+                        t.row.clear();
+                        t.row_line = line_of(range.start);
+                    }
+                }
+                Event::Start(Tag::TableCell) => {
+                    if let Some(t) = table.as_mut() {
+                        t.cell.clear();
+                    }
+                }
+                Event::Text(x) | Event::Code(x) => {
+                    if let Some(t) = table.as_mut() {
+                        t.cell.push_str(x);
+                    }
+                }
+                Event::End(TagEnd::TableCell) => {
+                    if let Some(t) = table.as_mut() {
+                        let c = std::mem::take(&mut t.cell);
+                        t.row.push(c.trim().to_string());
+                    }
+                }
+                Event::End(TagEnd::TableHead) => {
+                    if let Some(t) = table.as_mut() {
+                        t.header = std::mem::take(&mut t.row);
+                    }
+                }
+                Event::End(TagEnd::TableRow) => {
+                    if let Some(t) = table.as_mut() {
+                        let cells = std::mem::take(&mut t.row);
+                        t.rows.push(TableRow { cells, line: t.row_line });
+                    }
+                }
+                Event::End(TagEnd::Table) => {
+                    if let Some(t) = table.take()
+                        && let Some(p) = pending.as_mut()
+                    {
+                        let columns = t.header.iter().map(|h| Column::new(h)).collect();
+                        p.tables.push(Table { name: t.name, columns, rows: t.rows, link: None, line: t.line });
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 if level <= HeadingLevel::H2 {
@@ -398,7 +475,7 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
             Event::Start(Tag::List(_)) => list_depth += 1,
             Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
             Event::Start(Tag::Item) if list_depth == 1 && section_kind(&current).is_some() => {
-                pending = Some(Pending { line: line_of(range.start), text: String::new(), strong: String::new(), intent_done: false, notes: String::new(), blocks: vec![], designs: vec![] });
+                pending = Some(Pending { line: line_of(range.start), text: String::new(), strong: String::new(), intent_done: false, notes: String::new(), blocks: vec![], designs: vec![], tables: vec![] });
             }
             Event::End(TagEnd::Item) if list_depth == 1 => {
                 if let (Some(p), Some(kind)) = (pending.take(), section_kind(&current)) {
@@ -725,4 +802,75 @@ Why it matters.
         assert!(p.diagnostics.iter().any(|d| d.message.contains("Title")));
         assert!(p.diagnostics.iter().any(|d| d.message.contains("not valid YAML")));
     }
+}
+
+/// Check a step's tables against each other and against the `{{row.…}}` its
+/// blocks use, and work out how linked tables point at the first one.
+fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Diagnostic>) -> Vec<Table> {
+    let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
+    for t in &tables {
+        let mut seen = std::collections::HashSet::new();
+        for c in &t.columns {
+            if c.key.is_empty() {
+                err(diags, t.line, format!("table column `{}` needs a name made of letters or digits", c.header));
+            } else if !seen.insert(c.key.clone()) {
+                err(diags, t.line, format!("two table columns are both `{}`; give them different names", c.key));
+            }
+        }
+        if t.rows.is_empty() {
+            err(diags, t.line, "table has no rows".into());
+        }
+    }
+    if tables.len() > 1 {
+        let driver_name = tables[0].name.clone();
+        match &driver_name {
+            None => err(diags, tables[0].line, "this step has several tables: name the first one with a `Table: <name>` line above it, so the others can link to it".into()),
+            Some(dn) => {
+                let dkey = column_key(dn);
+                let ids: std::collections::HashSet<String> = tables[0].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
+                for t in tables.iter_mut().skip(1) {
+                    let Some(name) = t.name.clone() else {
+                        err(diags, t.line, format!("name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{{{row.<name>}}}}`"));
+                        continue;
+                    };
+                    match t.columns.iter().position(|c| c.key == dkey) {
+                        None => err(
+                            diags,
+                            t.line,
+                            format!("table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"),
+                        ),
+                        Some(i) => {
+                            t.link = Some(i);
+                            for r in &t.rows {
+                                let id = r.cells.get(i).map(|c| c.trim()).unwrap_or("");
+                                if !ids.contains(id) {
+                                    err(diags, r.line, format!("`{id}` in the `{dn}` column of table `{name}` isn't the id of any row in `{dn}`"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // `{{row.x}}` must name a column of the first table, or a linked table.
+    let known: Vec<String> = match tables.first() {
+        Some(d) => d.columns.iter().map(|c| c.key.clone()).chain(tables.iter().skip(1).filter_map(|t| t.name.as_deref().map(column_key))).collect(),
+        None => vec![],
+    };
+    for b in blocks {
+        for v in crate::template::variables(&b.value) {
+            let mut parts = v.split('.');
+            if parts.next() != Some("row") {
+                continue;
+            }
+            let col = parts.next().unwrap_or("");
+            if tables.is_empty() {
+                err(diags, b.line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
+            } else if !known.iter().any(|k| k == col) {
+                err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", known.join(", ")));
+            }
+        }
+    }
+    tables
 }

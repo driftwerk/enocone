@@ -277,6 +277,43 @@ env point at the prototype. `enocone prototype` serves it for people to
 click through. When the feature is built, the same steps run against the
 real app.
 
+## Tables of examples
+
+When a rule has many cases (prices, discounts, who may do what), write it as
+one step with a Markdown table rather than as many steps. People review the
+table; the step's blocks run once per row, and each row passes or fails on
+its own.
+
+````markdown
+2. **The discount depends on the customer and the order total**
+
+   | customer  | total | discount? |
+   |-----------|------:|----------:|
+   | new       |    40 |        0% |
+   | returning |   120 |       10% |
+
+   ```http
+   POST: "{{env.API}}/discount"
+   json: { customer: "{{row.customer}}", total: "{{row.total}}" }
+   expect:
+     json:
+       $.discount: "{{row.discount}}"
+   ```
+````
+
+- `{{row.<column>}}` is the row's value: the header in lower case, spaces as
+  `_`, without a trailing `?`. Numbers and `true`/`false` keep their type
+  when the value is only the template (`"{{row.total}}"` sends 40).
+- A header ending in `?` is an expected result; the others are inputs.
+- Data with parts uses a second, linked table: name the first with a
+  `Table: orders` line above it, and give the second (`Table: items`) a column
+  named `orders` holding the id (first column) of the order each line belongs
+  to. `{{row.items}}` is then that order's items as a list. One level only.
+- Rows run one after another; captures don't carry between rows. Use `http`
+  or `exec` blocks where you can: a browser block drives the browser per row.
+- `validate` rejects a `{{row.x}}` the table doesn't have, and a linked row
+  whose id isn't in the first table. Tables outside steps are only text.
+
 ## Variables
 
 `{{env.X}}` (enocone.toml env), `{{secret.X}}` (environment variable, masked

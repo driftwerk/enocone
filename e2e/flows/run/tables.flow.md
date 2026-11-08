@@ -3,7 +3,7 @@ area: Running flows
 tags: [tables, examples]
 owner: enocone
 priority: high
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-08)
 ---
 
@@ -82,7 +82,7 @@ that row's values:
 
    ```http
    POST: "{{env.API}}/quotes"
-   json: { customer: "{{row.customer}}", total: {{row.total}} }
+   json: { customer: "{{row.customer}}", total: "{{row.total}}" }
    expect:
      json:
        $.discount: "{{row.discount}}"
@@ -124,7 +124,7 @@ against the `total?` column:
 
 ```http
 POST: "{{env.API}}/orders"
-json: { customer: "{{row.customer}}", items: {{row.items}} }
+json: { customer: "{{row.customer}}", items: "{{row.items}}" }
 expect:
   json:
     $.total: "{{row.total}}"
@@ -133,19 +133,119 @@ expect:
 ## Given
 
 1. **Priya's flow has a discount table with four rows, one of them wrong**
+   ```exec
+   run: |
+     cp -R "{{env.FIXTURES}}/tables" "{{run.tmp}}/p"
+     "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{run.tmp}}/p/flows" 2>&1
+   expect: { stdout: "2 flows OK, 0 errors" }
+   ```
 
 ## When
 
 2. **She runs the flow**
+   ```exec
+   run: |
+     "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1
+     cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       $.summary.passed: 1
+       $.summary.failed: 1
+   ```
 
 ## Then
 
 3. **Each row is checked on its own: three pass and the wrong one fails, naming the row and the value that came back**
+   ```exec
+   run: |
+     cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].rows": { len: 4 }
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].rows[0].result.status": passed
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].rows[1].result.status": passed
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].rows[2].result.status": passed
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].rows[3].result.status": failed
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].status": failed
+       "$.flows[?(@.flow.id=='pricing.discount')].attempts[0].steps[0].error.message": { contains: "row 4 (returning, 120): $.discount: expected \"15%\", got \"10%\"" }
+   ```
 
 4. **The report shows the table with each row's result**
+   ```browser
+   - goto: "file://{{run.tmp}}/out/index.html#flow=pricing.discount"
+   - expect: { role: columnheader, name: Result }
+   - expect: { role: columnheader, name: "discount?" }
+   - expect: { text: "got 10%" }
+   - expect: { role: row, name: "returning 120 15% got 10% failed" }
+   - screenshot
+   ```
 
 5. **An order table linked to its line items sends each order with its items, and the totals match**
+   ```exec
+   run: |
+     cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].status": passed
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].rows": { len: 2 }
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].rows[0].label": "A, new"
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].rows[0].result.records[0].request_body": { contains: "book" }
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].rows[1].result.records[0].request_body": { not: { contains: "book" } }
+       "$.flows[?(@.flow.id=='pricing.orders')].attempts[0].steps[0].rows[1].result.status": passed
+   ```
 
 6. **A block that names a column the table doesn't have is rejected before anything runs, with the line to fix**
+   ```exec
+   run: |
+     "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{run.tmp}}/p/bad" 2>&1
+   expect:
+     exit: [2]
+     stdout: { matches: "bad/unknown-column\\.flow\\.md:17: error: `.*row\\.totl.*`: the table has no column `totl`" }
+   ```
 
 7. **Sam comments on one row on the team site, and the comment stays on that row after another row changes**
+   ```exec
+   run: |
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18189 "{{run.tmp}}/site" >/dev/null
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18189 "{{run.tmp}}/site" project:shop:Shop "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "token:priya+{{run.short_id}}@example.test" "link:sam+{{run.short_id}}@example.test"
+   expect: { stdout: seeded }
+   capture:
+     priya_token: { regex: "(enc_[0-9a-f]+)" }
+     sam_link: { regex: "(http://\\S+/auth/email\\?token=\\w+)" }
+   ```
+   ```exec
+   run: |
+     printf '\n[hub]\nurl = "http://127.0.0.1:18189"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
+     env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN ENOCONE_HUB_TOKEN="{{priya_token}}" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish "{{run.tmp}}/out/results.json"
+   expect: { stdout: "/shop/runs/" }
+   ```
+   ```browser
+   - goto: "{{sam_link}}"
+   - click: Sign in to
+   - goto: "http://127.0.0.1:18189/shop/review/pricing.discount"
+   - expect: { role: cell, name: "15%" }
+   - select: { label: Comment on, option: "Step 1, row: returning, 120" }
+   - fill: { label: Your comment, value: "Returning customers get 10% from 100; 15% was the old rate." }
+   - click: { button: Comment }
+   - expect: "Step 1, row: returning, 120"
+   ```
+   ```exec
+   run: |
+     sed -i.bak 's/| new       |    40 |        0% |/| new       |    50 |        0% |/' "{{run.tmp}}/p/flows/pricing/discount.flow.md"
+     grep -c "|    50 |" "{{run.tmp}}/p/flows/pricing/discount.flow.md"
+     "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out2" >/dev/null 2>&1
+     env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN ENOCONE_HUB_TOKEN="{{priya_token}}" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish "{{run.tmp}}/out2/results.json"
+   expect: { stdout: { matches: "^1\\n(?s).*/shop/runs/" } }
+   ```
+   ```browser
+   - goto: "http://127.0.0.1:18189/shop/review/pricing.discount"
+   - expect: { role: cell, name: "50" }
+   - expect: "15% was the old rate"
+   - expect: "Step 1, row: returning, 120"
+   - expect: { text: Outdated, hidden: true }
+   - screenshot
+   ```
+   ```exec
+   run: |
+     sh "{{env.FIXTURES}}/hub/stop.sh" 18189
+   ```

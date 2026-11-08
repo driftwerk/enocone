@@ -112,6 +112,33 @@ token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken", refresh 
 `refresh` re-reads a short-lived access token from the saved browser session
 when it gets that old, so long suites keep working.
 
+## Tables of examples
+
+A rule with many cases can be one step with a Markdown table. The step's
+blocks run once per row, with that row's values as `{{row.<column>}}`, and
+each row passes or fails on its own. A header ending in `?` is an expected
+result:
+
+````markdown
+1. **The discount depends on the customer and the order total**
+
+   | customer  | total | discount? |
+   |-----------|------:|----------:|
+   | new       |    40 |        0% |
+   | returning |   120 |       10% |
+
+   ```http
+   POST: "{{env.API}}/discount"
+   json: { customer: "{{row.customer}}", total: "{{row.total}}" }
+   expect: { json: { $.discount: "{{row.discount}}" } }
+   ```
+````
+
+The report shows the table with each row's result, and reviewers on the team
+site can comment on a single row. For data with parts, a second table links
+to the first: name them with `Table: orders` and `Table: items` lines, give
+`items` an `orders` column, and `{{row.items}}` is that order's items.
+
 ## With an AI agent
 
 `enocone init` writes a `.mcp.json` that runs `enocone mcp` (stdio). The server provides:

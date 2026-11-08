@@ -631,6 +631,7 @@
       h("div", { class: "sbody" },
         h("div", { class: "shead" }, h("span", { class: "intent" }, s.number ? h("span", { class: "n" }, `${s.number}.`) : null, s.intent), r && r.duration_ms ? h("span", { class: "small" }, fmtMs(r.duration_ms)) : null),
         s.notes ? h("div", { class: "note" }, s.notes) : null,
+        stepTables(s, r),
         stepDesigns(s, r),
         !s.blocks.length && !opts.designing ? h("div", { class: "note pend" }, "Not implemented yet. This step describes agreed behaviour; an http, browser, expect, use, exec or email block will make it executable.") : null,
         how,
@@ -640,6 +641,49 @@
         r && r.screenshot && !(s.designs || []).some((d) => d.screen) ? h("figure", { class: "shot" }, h("img", { src: r.screenshot, alt: `Screenshot after: ${s.intent}`, loading: "lazy", onclick: (e) => zoom(e.target.src) }),
           h("figcaption", { class: "small" }, "Screenshot after this step", r.page_url ? ` · ${r.page_url}` : "")) : null,
         detail), notes);
+  }
+
+  // A step's tables of examples: the first with each row's result, then any linked tables.
+  function stepTables(s, r) {
+    const tables = s.tables || [];
+    if (!tables.length) return null;
+    const rowRes = new Map(((r && r.rows) || []).map((x) => [x.row, x]));
+    // Checks describe the expected value as `= "15%"`; compare the value itself.
+    const unquote = (v) => (v == null ? "" : String(v).replace(/^=\s*/, "").replace(/^"(.*)"$/, "$1"));
+    const one = (t, ti) => {
+      const driving = ti === 0;
+      const ran = driving && rowRes.size > 0;
+      const head = t.columns.map((c, ci) => (t.link === ci ? null : h("th", { class: c.expected ? "exp" : null, title: c.expected ? "Expected result" : null }, c.header)));
+      const body = t.rows.map((row, ri) => {
+        const rr = driving ? rowRes.get(ri + 1) : null;
+        const st = rr ? rr.result.status : null;
+        const err = rr && rr.result.error;
+        const cells = t.columns.map((c, ci) => {
+          if (t.link === ci) return null;
+          const v = row.cells[ci] || "";
+          // In a failed row, an expected cell that the failed check compared against shows what came back.
+          const same = (a, b) => a === b || (a !== "" && b !== "" && !isNaN(a) && !isNaN(b) && Number(a) === Number(b));
+          const bad = st === "failed" && c.expected && err && err.expected != null && same(unquote(err.expected), v.trim());
+          return h("td", { class: [c.expected ? "exp" : null, bad ? "bad" : null].filter(Boolean).join(" ") || null }, v, bad && err.actual != null ? h("span", { class: "got" }, ` got ${unquote(err.actual)}`) : null);
+        });
+        const mark = !ran ? null : h("td", { class: "res" },
+          st === "passed" ? [svg(ICON.check, 12), " passed"] : st === "failed" ? [svg(ICON.x, 12), " failed"] : statusLabel(st || "not-run"));
+        const tr = h("tr", { class: st ? `r-${st}` : null }, cells, mark);
+        if (!rr) return tr;
+        // Open a row to see what it sent and got back.
+        const more = h("tr", { class: "rdetail", style: "display:none" }, h("td", { colspan: String(t.columns.length + 1) },
+          err ? h("div", { class: "err" }, err.message) : null,
+          (rr.result.records || []).length ? h("pre", { class: "term" }, happened(rr.result)) : null));
+        tr.classList.add("clickable");
+        tr.title = "Show what this row sent and got back";
+        tr.onclick = () => { more.style.display = more.style.display === "none" ? "" : "none"; };
+        return [tr, more];
+      });
+      return h("div", { class: "xtable" },
+        t.name ? h("div", { class: "small tname" }, `Table: ${t.name}`) : null,
+        h("table", null, h("thead", null, h("tr", null, head, ran ? h("th", null, "Result") : null)), h("tbody", null, body)));
+    };
+    return h("div", { class: "xtables" }, tables.map(one));
   }
 
   function zoom(src) {
