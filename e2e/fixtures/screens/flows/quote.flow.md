@@ -11,6 +11,7 @@ Used by enocone's own suite to check that mockups sit beside their steps.
 
 1. **A quote has been sent**
    ```exec
+   # Stand-in: the quote was sent
    run: "true"
    ```
 
@@ -26,5 +27,6 @@ Used by enocone's own suite to check that mockups sit beside their steps.
 
 3. **The quote is accepted**
    ```exec
+   # Stand-in: the client accepts
    run: "true"
    ```

@@ -31,6 +31,7 @@ flowchart LR
 
 1. **A flow with screens “quote”, “pay” and “done” and a storyboard linking them through steps 2 and 3**
    ```exec
+   # Copy the storyboard project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/storyboard" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -40,6 +41,7 @@ flowchart LR
 
 2. **The docs view is built**
    ```exec
+   # Build the docs view and read its results
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" docs --out "{{run.tmp}}/docs" && cat "{{run.tmp}}/docs/results.json"
    expect:
@@ -70,6 +72,7 @@ flowchart LR
 
 4. **A storyboard that mentions a screen with no file fails validation**
    ```exec
+   # Validate a storyboard that names a missing screen
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{env.FIXTURES}}/storyboard-bad/bad-board.flow.md"
    expect:

@@ -35,6 +35,7 @@ flowchart LR
 
 1. **Kingsley owns the shop project**
    ```exec
+   # Start a test site where Kingsley owns shop, with Priya and Sam invited
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18183 "{{run.tmp}}/site" >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18183 "{{run.tmp}}/site" project:shop:Shop project:billing:Billing "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:billing:olu+{{run.short_id}}@example.test:member" "token:priya+{{run.short_id}}@example.test" "link:owner+{{run.short_id}}@example.test"
@@ -77,6 +78,7 @@ flowchart LR
 
 3. **Sam can read and comment on shop but not publish to it**
    ```exec
+   # Publish a run as Priya, and get Sam a token
    run: |
      cp -R "{{env.FIXTURES}}/hub-review" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run >/dev/null 2>&1
      env -u GITHUB_ACTIONS -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN ENOCONE_HUB_TOKEN="{{priya_token}}" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish --url http://127.0.0.1:18183 --to shop >/dev/null
@@ -108,6 +110,7 @@ flowchart LR
 
 4. **Someone who isn't a member gets “not found” for /shop**
    ```exec
+   # Get a sign-in link for someone who isn't a member
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18183 "{{run.tmp}}/site" "link:olu+{{run.short_id}}@example.test"
    capture: { olu_link: { regex: "(http://\\S+/auth/email\\?token=\\w+)" } }
@@ -132,6 +135,7 @@ flowchart LR
        $.projects[0]: shop
    ```
    ```exec
+   # Remove Priya from shop
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18183 "{{run.tmp}}/site" "remove:shop:email:priya+{{run.short_id}}@example.test"
    expect: { stdout: seeded }
@@ -143,6 +147,7 @@ flowchart LR
    expect: { status: 404 }
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18183
    ```

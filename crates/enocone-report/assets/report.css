@@ -330,3 +330,4 @@ header.top .crumbs a:hover { background: rgba(185,172,255,.2); }
 .xtable tr.clickable:hover td { filter: brightness(0.97); }
 .xtable tr.rdetail td { background: var(--surface); }
 .xtable .tname { margin-bottom: 4px; }
+.untitled { font-style: italic; opacity: .75; }

@@ -34,6 +34,7 @@ flowchart LR
 
 1. **The demo app sends Jane a quote email when a quote is created**
    ```exec
+   # Copy the email project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/email" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "2 flows OK" }
@@ -47,6 +48,7 @@ flowchart LR
    title: The email as the report shows it
    ```
    ```exec
+   # Run the quote-email flow and read the results
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --id quote-email --out "{{run.tmp}}/out" && cat "{{run.tmp}}/out/results.json"
    expect:
@@ -63,6 +65,7 @@ flowchart LR
 
 3. **Opening the captured link shows Jane's quote**
    ```exec
+   # Read the run's results
    run: |
      cat "{{run.tmp}}/out/results.json"
    expect:
@@ -78,6 +81,7 @@ flowchart LR
 
 4. **Waiting for an email that never comes fails with what the mailbox did contain**
    ```exec
+   # Run a flow that waits for an email that never comes
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --id wrong-subject --out "{{run.tmp}}/missing"
    expect:

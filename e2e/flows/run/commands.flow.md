@@ -26,6 +26,7 @@ flowchart LR
    title: A command step in the report
    ```
    ```exec
+   # Ask the binary for its version
    run: |
      "{{env.ENOCONE_BIN}}" --version
    expect: { stdout: enocone }
@@ -36,6 +37,7 @@ flowchart LR
 
 2. **A project that hasn't allowed commands refuses to run them**
    ```exec
+   # Run a project that hasn't allowed commands
    run: |
      mkdir -p "{{run.tmp}}/p/flows" && cp "{{env.FIXTURES}}/exec-off/enocone.toml" "{{run.tmp}}/p/" && cp "{{env.FIXTURES}}/exec-off/flow.flow.md" "{{run.tmp}}/p/flows/"
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1

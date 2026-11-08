@@ -54,6 +54,7 @@ flowchart LR
    path: /login
    ```
    ```exec
+   # Start a test site with a GitHub app, and invite Sam
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" GH_CLIENT=fixture-github-client sh "{{env.FIXTURES}}/hub/start.sh" 18182 "{{run.tmp}}/site"
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18182 "{{run.tmp}}/site" project:shop:Shop project:billing:Billing "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "invite:shop:acme/qa:member"
@@ -160,6 +161,7 @@ flowchart LR
    - expect: { heading: "@outsider-{{run.short_id}} isn't on any project here" }
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18182
    ```

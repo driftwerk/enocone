@@ -49,6 +49,7 @@ flowchart LR
 
 1. **Priya's AI tool has written a draft flow and run it**
    ```exec
+   # Start a test site with Priya and Sam on shop
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18187 "{{run.tmp}}/site" >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18187 "{{run.tmp}}/site" project:shop:Shop "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "token:priya+{{run.short_id}}@example.test"
@@ -56,6 +57,7 @@ flowchart LR
    capture: { priya_token: { regex: "(enc_[0-9a-f]+)" } }
    ```
    ```exec
+   # Run the draft through the MCP server
    run: |
      cp -R "{{env.FIXTURES}}/hub-review" "{{run.tmp}}/p"
      printf '\n[hub]\nurl = "http://127.0.0.1:18187"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
@@ -67,6 +69,7 @@ flowchart LR
 
 2. **It publishes the run to the shop project**
    ```exec
+   # Ask the MCP server for the site's status
    run: |
      export ENOCONE_HUB_TOKEN="{{priya_token}}"
      unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
@@ -78,6 +81,7 @@ flowchart LR
        $.project_url: "http://127.0.0.1:18187/shop"
    ```
    ```exec
+   # Publish the run through the MCP server
    run: |
      export ENOCONE_HUB_TOKEN="{{priya_token}}"
      unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
@@ -90,6 +94,7 @@ flowchart LR
 
 3. **Sam comments on the draft's expiry rule**
    ```exec
+   # Get Sam a sign-in link
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18187 "{{run.tmp}}/site" "link:sam+{{run.short_id}}@example.test"
    capture:
@@ -107,6 +112,7 @@ flowchart LR
 
 4. **The AI reads the open comments on that flow**
    ```exec
+   # Read the flow's open comments through the MCP server
    run: |
      export ENOCONE_HUB_TOKEN="{{priya_token}}"
      unset GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
@@ -121,6 +127,7 @@ flowchart LR
 
 5. **It sees Sam's comment, the rule it quotes, and that it's open**
    ```exec
+   # Check the comment, the rule it quotes and that it's open
    run: |
      cat "{{run.tmp}}/comments.json"
    expect:
@@ -135,6 +142,7 @@ flowchart LR
 
 6. **Without a sign-in it is told to run enocone login, and is shown no comments**
    ```exec
+   # Ask for comments without signing in
    run: |
      unset ENOCONE_HUB_TOKEN GITHUB_ACTIONS ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
      python3 "{{env.FIXTURES}}/mcp/call.py" "{{env.ENOCONE_BIN}}" "{{run.tmp}}/p" review_comments '{"id": "quotes.accept-from-email"}'
@@ -142,6 +150,7 @@ flowchart LR
      stdout: { contains: "run `enocone login`", not: { contains: "conveyancing" } }
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18187
    ```

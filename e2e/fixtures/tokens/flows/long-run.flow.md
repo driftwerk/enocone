@@ -18,6 +18,7 @@ Used by enocone's own suite to check that browser-profile tokens are refreshed.
 
 2. **Three seconds pass, longer than a token lasts**
    ```exec
+   # Wait three seconds
    run: sleep 3
    ```
 

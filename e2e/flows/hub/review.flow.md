@@ -39,6 +39,7 @@ flowchart LR
 
 1. **Priya has published the draft “Client accepts a quote from the email”**
    ```exec
+   # Start a test site with Priya and Sam on shop
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18185 "{{run.tmp}}/site" >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18185 "{{run.tmp}}/site" project:shop:Shop "invite:shop:priya+{{run.short_id}}@example.test:member" "invite:shop:sam+{{run.short_id}}@example.test:reviewer" "token:priya+{{run.short_id}}@example.test"
@@ -46,6 +47,7 @@ flowchart LR
    capture: { priya_token: { regex: "(enc_[0-9a-f]+)" } }
    ```
    ```exec
+   # Run the draft and publish it as Priya
    run: |
      cp -R "{{env.FIXTURES}}/hub-review" "{{run.tmp}}/p"
      printf '\n[hub]\nurl = "http://127.0.0.1:18185"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
@@ -63,6 +65,7 @@ flowchart LR
    path: /shop/review/quotes.accept-from-email
    ```
    ```exec
+   # Get sign-in links for Sam and Priya
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18185 "{{run.tmp}}/site" "link:sam+{{run.short_id}}@example.test" "link:priya+{{run.short_id}}@example.test"
    capture:
@@ -92,6 +95,7 @@ flowchart LR
 
 3. **Priya changes the rule to 30 days and publishes again**
    ```exec
+   # Change the rule to 30 days, run and publish again
    run: |
      sed -i.bak 's/expires after 14 days/expires after 30 days/' "{{run.tmp}}/p/flows/quotes/accept-from-email.flow.md"
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run >/dev/null 2>&1
@@ -117,6 +121,7 @@ flowchart LR
    - expect: "Resolved (1)"
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18185
    ```

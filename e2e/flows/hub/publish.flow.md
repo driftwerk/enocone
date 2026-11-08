@@ -46,6 +46,7 @@ flowchart LR
 
 1. **Priya is a member of shop and has run enocone login**
    ```exec
+   # Start a test site with Priya as a member of shop
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18184 "{{run.tmp}}/site" >/dev/null
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18184 "{{run.tmp}}/site" project:shop:Shop:acme/shop "invite:shop:priya+{{run.short_id}}@example.test:member" "token:priya+{{run.short_id}}@example.test" "link:priya+{{run.short_id}}@example.test"
@@ -55,6 +56,7 @@ flowchart LR
      priya_link: { regex: "(http://\\S+/auth/email\\?token=\\w+)" }
    ```
    ```exec
+   # Sign Priya in with her token
    run: |
      printf %s "{{priya_token}}" | ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/credentials" "{{env.ENOCONE_BIN}}" login --with-token --url http://127.0.0.1:18184
      ls -l "{{run.tmp}}/credentials"
@@ -70,6 +72,7 @@ flowchart LR
    title: Publishing from the command line and CI
    ```
    ```exec
+   # Run the prototype and publish it as Priya
    run: |
      cp -R "{{env.FIXTURES}}/prototype" "{{run.tmp}}/p"
      printf '\n[hub]\nurl = "http://127.0.0.1:18184"\nproject = "shop"\n' >> "{{run.tmp}}/p/enocone.toml"
@@ -93,6 +96,7 @@ flowchart LR
 
 3. **The CI workflow for acme/shop runs with publish: true**
    ```exec
+   # Publish from the acme/shop CI workflow
    run: |
      GITHUB_ACTIONS=true ACTIONS_ID_TOKEN_REQUEST_TOKEN=fixture-oidc-request ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/none" ACTIONS_ID_TOKEN_REQUEST_URL="{{env.WEB}}/oidc/token?repository=acme/shop&actor=dev" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
    expect:
@@ -126,6 +130,7 @@ flowchart LR
 
 5. **A token from a workflow in another repository is refused**
    ```exec
+   # Publish from a workflow in acme/other
    run: |
      GITHUB_ACTIONS=true ACTIONS_ID_TOKEN_REQUEST_TOKEN=fixture-oidc-request ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/none" ACTIONS_ID_TOKEN_REQUEST_URL="{{env.WEB}}/oidc/token?repository=acme/other" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
    expect:
@@ -133,6 +138,7 @@ flowchart LR
      stderr: "A workflow in acme/other can't publish to shop"
    ```
    ```exec
+   # Publish from a pull_request_target workflow
    run: |
      GITHUB_ACTIONS=true ACTIONS_ID_TOKEN_REQUEST_TOKEN=fixture-oidc-request ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/none" ACTIONS_ID_TOKEN_REQUEST_URL="{{env.WEB}}/oidc/token?repository=acme/shop&event_name=pull_request_target" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
    expect:
@@ -140,6 +146,7 @@ flowchart LR
      stderr: "pull_request_target can't publish"
    ```
    ```exec
+   # Publish with a token meant for another site
    run: |
      GITHUB_ACTIONS=true ACTIONS_ID_TOKEN_REQUEST_TOKEN=fixture-oidc-request ENOCONE_CREDENTIALS_FILE="{{run.tmp}}/none" ACTIONS_ID_TOKEN_REQUEST_URL="{{env.WEB}}/oidc/token?repository=acme/shop&aud_override=https://elsewhere.example" "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" publish
    expect:
@@ -173,6 +180,7 @@ flowchart LR
 
 7. **A run published 31 days ago is gone, and the flows it carried are still there**
    ```exec
+   # Sweep old runs at 29 days, then at 31 days
    run: |
      ENOCONE_DATA="{{run.tmp}}/site" "{{env.ENOCONE_BIN}}" serve --sweep --clock-offset-days 29
      ENOCONE_DATA="{{run.tmp}}/site" "{{env.ENOCONE_BIN}}" serve --sweep --clock-offset-days 31
@@ -186,6 +194,7 @@ flowchart LR
    - expect: { link: Client accepts and pays a quote from the new quote page }
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18184
    ```

@@ -134,6 +134,7 @@ expect:
 
 1. **Priya's flow has a discount table with four rows, one of them wrong**
    ```exec
+   # Copy Priya's pricing project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/tables" "{{run.tmp}}/p"
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{run.tmp}}/p/flows" 2>&1
@@ -144,6 +145,7 @@ expect:
 
 2. **She runs the flow**
    ```exec
+   # Run it and read the results
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1
      cat "{{run.tmp}}/out/results.json"
@@ -157,6 +159,7 @@ expect:
 
 3. **Each row is checked on its own: three pass and the wrong one fails, naming the row and the value that came back**
    ```exec
+   # Check each row's result
    run: |
      cat "{{run.tmp}}/out/results.json"
    expect:
@@ -182,6 +185,7 @@ expect:
 
 5. **An order table linked to its line items sends each order with its items, and the totals match**
    ```exec
+   # Check the orders and their items
    run: |
      cat "{{run.tmp}}/out/results.json"
    expect:
@@ -196,6 +200,7 @@ expect:
 
 6. **A block that names a column the table doesn't have is rejected before anything runs, with the line to fix**
    ```exec
+   # Validate a flow that uses an unknown column
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{run.tmp}}/p/bad" 2>&1
    expect:

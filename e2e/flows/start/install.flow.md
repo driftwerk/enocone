@@ -49,6 +49,7 @@ flowchart LR
 
 1. **A new version of enocone is tagged**
    ```exec
+   # Check --version matches Cargo.toml, and that the release checks the tag
    run: |
      crate=$(sed -n 's/^version = "\(.*\)"/\1/p' ../Cargo.toml | head -1)
      [ "$("{{env.ENOCONE_BIN}}" --version)" = "enocone $crate" ] && echo "enocone --version matches Cargo.toml ($crate)"
@@ -61,6 +62,7 @@ flowchart LR
 
 2. **The release builds an archive for each platform, each with the driver beside the binary**
    ```exec
+   # Package an archive with the driver, as the release does
    run: |
      # What the release's Package step does, with the binary under test.
      cli=$(env -u PLAYWRIGHT_DRIVER_PATH "{{env.ENOCONE_BIN}}" doctor | sed -n 3p | tr -d ' ')
@@ -75,6 +77,7 @@ flowchart LR
 
 3. **The tap's formula is updated to the new version and checksums**
    ```exec
+   # Write the Homebrew formula for the archives
    run: |
      tar="{{run.tmp}}/dist/enocone.tar"
      sha=$( (sha256sum "$tar" 2>/dev/null || shasum -a 256 "$tar") | cut -c1-64)
@@ -87,6 +90,7 @@ flowchart LR
 
 4. **Ana installs enocone with Homebrew on her Mac**
    ```exec
+   # Install the archive as the formula does
    run: |
      # The formula's install: both into libexec, and a symlink in bin.
      mkdir -p "{{run.tmp}}/brew/libexec" "{{run.tmp}}/brew/bin"
@@ -100,6 +104,7 @@ flowchart LR
 
 5. **enocone doctor shows the bundled driver, and --version shows the new version**
    ```exec
+   # Show the installed version and doctor
    run: |
      env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" --version
      env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" doctor
@@ -109,6 +114,7 @@ flowchart LR
 
 6. **After enocone install-browsers, a flow with browser steps passes**
    ```exec
+   # Run a browser flow with the installed enocone
    run: |
      cp -R "{{env.FIXTURES}}/designed-vs-built" "{{run.tmp}}/p"
      env -u PLAYWRIGHT_DRIVER_PATH "{{run.tmp}}/brew/bin/enocone" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1

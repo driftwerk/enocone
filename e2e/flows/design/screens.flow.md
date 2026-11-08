@@ -38,6 +38,7 @@ flowchart LR
 
 1. **A project with a theme whose primary colour is #1D4BE5 and a screen “quote” that uses it**
    ```exec
+   # Copy the screens project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/screens" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -47,6 +48,7 @@ flowchart LR
 
 2. **The docs view is built for a flow whose step 2 shows the “quote” screen**
    ```exec
+   # Build the docs view and read its results
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" docs --out "{{run.tmp}}/docs" && cat "{{run.tmp}}/docs/results.json"
    expect:
@@ -77,6 +79,7 @@ flowchart LR
 
 5. **render-screen writes a PNG of the “quote” screen**
    ```exec
+   # Draw the quote screen as a PNG
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" render-screen quote --out "{{run.tmp}}/quote.png" && head -c 4 "{{run.tmp}}/quote.png" | tail -c 3
    expect: { stdout: PNG, stderr: quote.png }

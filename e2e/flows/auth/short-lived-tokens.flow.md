@@ -32,6 +32,7 @@ flowchart LR
 
 1. **The demo app issues tokens that expire after 2 seconds**
    ```exec
+   # Copy the token project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/tokens" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -41,6 +42,7 @@ flowchart LR
 
 2. **A flow calls the API, waits 3 seconds, and calls it again as the same profile**
    ```exec
+   # Run the flow that calls the API twice
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out"
    timeout: 60s
@@ -55,6 +57,7 @@ flowchart LR
    title: When a refresh fails, the step says why
    ```
    ```exec
+   # Read the run's results
    run: |
      cat "{{run.tmp}}/out/results.json"
    expect:

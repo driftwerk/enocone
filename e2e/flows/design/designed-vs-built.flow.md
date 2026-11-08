@@ -29,6 +29,7 @@ flowchart LR
 
 1. **A flow whose step opens the demo app's payment page and also shows the “pay” mockup**
    ```exec
+   # Copy the payment project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/designed-vs-built" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -38,6 +39,7 @@ flowchart LR
 
 2. **The flow runs against the demo app and passes**
    ```exec
+   # Run it against the demo app and read the results
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" && cat "{{run.tmp}}/out/results.json"
    expect:

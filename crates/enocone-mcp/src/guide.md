@@ -108,8 +108,9 @@ Rules of thumb:
 
 Give a block a title with a comment on its first line, saying what it does
 for the reader (`# Start a test site with Priya and Sam`). The report lists
-each block by its title, with the YAML folded away; without one it shows a
-summary of the command or the page it opens.
+each block by its title, with the YAML folded away. `exec` blocks need one
+(see below); for the others it's optional, and without one the report shows
+a summary of the request or the page it opens.
 
 ### `http`
 
@@ -188,7 +189,12 @@ auth/sign-in: { username: "{{secret.USER}}", password: "{{secret.PASSWORD}}" }
 Run a command (only when the project sets `allow_exec = true` under `[run]`).
 For CLIs, scripts and database seeding. Runs in the project root.
 
+Always start an `exec` block with a `# title`: the report shows a reviewer
+that line, not the command, and `validate` warns without one. Say what it
+checks or sets up ("Seed a lead for Jane"), not how ("Run seed.sh").
+
 ```yaml
+# Seed a lead for Jane
 run: |                          # a shell command, or a list of arguments
   ./scripts/seed.sh --lead "{{lead_id}}"
 cwd: tools                      # optional, relative to the project root

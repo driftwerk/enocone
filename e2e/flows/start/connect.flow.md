@@ -49,6 +49,7 @@ flowchart LR
 
 1. **Ana has a repository acme/shop with no enocone files**
    ```exec
+   # Make an empty repository for acme/shop
    run: |
      mkdir -p "{{run.tmp}}/shop" && cd "{{run.tmp}}/shop"
      git init -q . && git remote add origin https://github.com/acme/shop.git
@@ -60,6 +61,7 @@ flowchart LR
 
 2. **She runs enocone init --name shop --hub https://enoc.one**
    ```exec
+   # Run enocone init with the site
    run: |
      bin=$(realpath "{{env.ENOCONE_BIN}}") && cd "{{run.tmp}}/shop"
      "$bin" init --name shop --hub https://enoc.one 2>&1 | tee "{{run.tmp}}/first.txt"
@@ -71,6 +73,7 @@ flowchart LR
 
 3. **The project has enocone.toml with a [hub] section, .mcp.json and a CI workflow that publishes**
    ```exec
+   # Show the [hub] section of enocone.toml
    run: |
      cd "{{run.tmp}}/shop"
      sed -n '/^\[hub\]/,$p' enocone.toml
@@ -78,6 +81,7 @@ flowchart LR
      stdout: { matches: "(?s)\\[hub\\]\\s*url = \"https://enoc\\.one\"\\s*project = \"shop\"" }
    ```
    ```exec
+   # Show .mcp.json
    run: |
      cat "{{run.tmp}}/shop/.mcp.json"
    expect:
@@ -85,6 +89,7 @@ flowchart LR
        $.mcpServers.enocone.args[0]: mcp
    ```
    ```exec
+   # Show the CI workflow
    run: |
      cat "{{run.tmp}}/shop/.github/workflows/enocone.yml"
    expect:
@@ -93,6 +98,7 @@ flowchart LR
 
 4. **The printout lists the steps left: sign in, create shop on the site linked to acme/shop, open the AI tool**
    ```exec
+   # Show the steps left in the printout
    run: |
      sed -n '/^Next:/,$p' "{{run.tmp}}/first.txt"
    expect:
@@ -101,6 +107,7 @@ flowchart LR
 
 5. **Running init again changes nothing and says which files were already there**
    ```exec
+   # Run init again and compare the files
    run: |
      bin=$(realpath "{{env.ENOCONE_BIN}}") && cd "{{run.tmp}}/shop"
      before=$(find . -path ./.git -prune -o -type f -print | sort | xargs cat | cksum)

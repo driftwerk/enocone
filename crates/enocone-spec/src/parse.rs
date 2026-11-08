@@ -535,6 +535,13 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
                         Value::Null
                     }
                 };
+                if kind == BlockKind::Exec && !text.lines().find(|l| !l.trim().is_empty()).is_some_and(|l| l.trim_start().starts_with('#')) {
+                    diags.push(Diagnostic {
+                        line,
+                        severity: Severity::Warning,
+                        message: "exec block has no title: add a `# comment` on its first line saying, for a reviewer, what it checks or sets up".into(),
+                    });
+                }
                 let block = RawBlock { kind, source: text.trim_end().to_string(), value, line };
                 if let Some(p) = pending.as_mut() {
                     p.blocks.push(block);
@@ -854,6 +861,16 @@ Why it matters.
         assert_eq!(steps[3].intent, "Remove the lead");
         assert_eq!(steps[3].number, None);
         assert_eq!(steps[0].line, 13);
+    }
+
+    #[test]
+    fn exec_blocks_need_a_title() {
+        let warn = |body: &str| {
+            let src = format!("# A flow\n\nWhy.\n\n## Then\n\n1. **It runs**\n   ```exec\n{body}   ```\n");
+            parse_flow("flows/x.flow.md", &src).diagnostics.iter().any(|d| d.message.contains("no title"))
+        };
+        assert!(warn("   run: echo hi\n"));
+        assert!(!warn("   # Say hello\n   run: echo hi\n"));
     }
 
     #[test]

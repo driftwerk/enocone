@@ -39,6 +39,7 @@ flowchart LR
 
 1. **A flow with three steps and a chart whose boxes 1, 2 and 3 are tied to them**
    ```exec
+   # Copy the chart project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/flowchart" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -48,6 +49,7 @@ flowchart LR
 
 2. **The flow runs and step 2 fails**
    ```exec
+   # Run the flow
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out"
    expect: { exit: 1 }
@@ -57,6 +59,7 @@ flowchart LR
 
 3. **results.json carries the chart with box 1 passed, box 2 failed and box 3 skipped**
    ```exec
+   # Read the chart's results
    run: |
      cat "{{run.tmp}}/out/results.json"
    expect:
@@ -86,6 +89,7 @@ flowchart LR
 
 5. **A chart box that points at step 9 of a one-step flow fails validation with its line**
    ```exec
+   # Validate a chart that points at a missing step
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate "{{env.FIXTURES}}/flowchart-bad/bad-chart.flow.md"
    expect:

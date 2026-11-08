@@ -17,11 +17,13 @@ flowchart LR
 
 1. **An order is placed**
    ```exec
+   # Place the order (always succeeds)
    run: "true"
    ```
 
 2. **The payment is taken**
    ```exec
+   # Take the payment (the card is declined)
    run: |
      echo "card declined" >&2; exit 1
    ```
@@ -30,5 +32,6 @@ flowchart LR
 
 3. **A receipt is sent**
    ```exec
+   # Send the receipt
    run: "true"
    ```

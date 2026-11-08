@@ -35,6 +35,7 @@ flowchart LR
 
 1. **A visitor opens the site without signing in**
    ```exec
+   # Start a test site with a GitHub app and a project
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" GH_CLIENT=fixture-github-client sh "{{env.FIXTURES}}/hub/start.sh" 18186 "{{run.tmp}}/site"
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18186 "{{run.tmp}}/site" project:shop:Shop "invite:shop:sam+{{run.short_id}}@example.test:reviewer"
@@ -75,6 +76,7 @@ flowchart LR
 
 4. **On a site without a GitHub app, the home page offers only the email link**
    ```exec
+   # Restart the test site without a GitHub app
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18186 && BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18186 "{{run.tmp}}/site"
    expect: { stdout: "ready on port 18186" }
@@ -85,6 +87,7 @@ flowchart LR
    - expect: { link: Continue with GitHub, hidden: true }
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18186
    ```

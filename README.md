@@ -96,7 +96,8 @@ flowchart LR
   count.
 - **`exec` blocks** run a command and check its exit code, output or JSON.
   This is useful for CLIs and for seeding data. They are off unless
-  `[run] allow_exec = true`.
+  `[run] allow_exec = true`. Start each with a `# title` saying what it does:
+  the report shows reviewers that line, with the command folded underneath.
 
 ```toml
 [email]

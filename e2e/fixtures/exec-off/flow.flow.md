@@ -6,5 +6,6 @@ Used by enocone's own suite.
 
 1. **Runs echo**
    ```exec
+   # Print a greeting
    run: echo hi
    ```

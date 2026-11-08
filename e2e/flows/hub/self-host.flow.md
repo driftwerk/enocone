@@ -36,6 +36,7 @@ flowchart LR
 
 1. **An empty data folder and an owner email**
    ```exec
+   # Make an empty data folder
    run: |
      mkdir -p "{{run.tmp}}/site" && ls -A "{{run.tmp}}/site" | wc -l | tr -d ' '
    expect: { stdout: "0" }
@@ -45,6 +46,7 @@ flowchart LR
 
 2. **enocone serve starts on a local port**
    ```exec
+   # Start enocone serve on a local port
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18181 "{{run.tmp}}/site" && curl -fsS http://127.0.0.1:18181/healthz
    expect: { stdout: "ready on port 18181" }
@@ -80,6 +82,7 @@ flowchart LR
 
 4. **Restarting the server keeps the project and the owner's session**
    ```exec
+   # Restart the server
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18181 && BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18181 "{{run.tmp}}/site"
    expect: { stdout: "ready on port 18181" }
@@ -91,6 +94,7 @@ flowchart LR
    - screenshot
    ```
    ```exec
+   # Stop the server
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18181
    ```

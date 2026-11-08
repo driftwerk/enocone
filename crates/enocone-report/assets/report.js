@@ -519,6 +519,8 @@
     const lines = (b.source || "").split("\n").map((l) => l.trim());
     const own = lines.find((l) => l);
     if (own && own.startsWith("#")) return own.replace(/^#+\s*/, "");
+    // A command means little to a reviewer: without a title, say so (the command is in the details).
+    if (b.kind === "exec") return h("span", { class: "untitled" }, "Runs a command (no description)");
     const t = blockSummary(b);
     return t.length > 80 ? t.slice(0, 79) + "…" : t;
   }

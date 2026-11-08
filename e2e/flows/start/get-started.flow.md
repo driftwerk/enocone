@@ -27,6 +27,7 @@ connect, ask your AI tool for flows.
 
 1. **A visitor opens the home page**
    ```exec
+   # Start a test site
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/start.sh" 18188 "{{run.tmp}}/site"
    expect: { stdout: "ready on port 18188" }
@@ -50,6 +51,7 @@ connect, ask your AI tool for flows.
    - screenshot
    ```
    ```exec
+   # Stop the test site
    run: |
      sh "{{env.FIXTURES}}/hub/stop.sh" 18188
    ```

@@ -34,6 +34,7 @@ flowchart LR
 
 1. **A draft flow with screens, a storyboard, sample values and browser steps**
    ```exec
+   # Copy the prototype project and check it is valid
    run: |
      cp -R "{{env.FIXTURES}}/prototype" "{{run.tmp}}/p" && "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" validate
    expect: { stderr: "1 flows OK" }
@@ -43,6 +44,7 @@ flowchart LR
 
 2. **It runs with --prototype**
    ```exec
+   # Run it with --prototype
    run: |
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --prototype --out "{{run.tmp}}/proto"
    expect: { exit: 0, stderr: "1 passed" }
@@ -56,6 +58,7 @@ flowchart LR
    title: A prototype run in the report
    ```
    ```exec
+   # Read the prototype run's results
    run: |
      cat "{{run.tmp}}/proto/results.json"
    expect:
@@ -76,12 +79,14 @@ flowchart LR
 
 4. **The same browser steps fail against an app that doesn't have the feature**
    ```exec
+   # Approve the flow and run it against the demo app
    run: |
      sed -i.bak 's/stage: draft/stage: approved/' "{{run.tmp}}/p/flows/accept-and-pay.flow.md" && rm "{{run.tmp}}/p/flows/accept-and-pay.flow.md.bak"
      "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/real"
    expect: { exit: 1 }
    ```
    ```exec
+   # Read the real run's results
    run: |
      cat "{{run.tmp}}/real/results.json"
    expect:
