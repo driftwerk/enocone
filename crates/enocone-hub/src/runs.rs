@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{self, Project, Role, User};
 use crate::pages::{self, esc};
-use crate::{App, Fail, R, auth, project_for, require_user, same_origin, visible_projects};
+use crate::{App, Fail, R, auth, is_member, project_for, read_access, require_user, same_origin, visible_projects};
 
 /// The largest publish accepted: results plus screenshots, base64-encoded.
 pub const MAX_UPLOAD: usize = 80 * 1024 * 1024;
@@ -280,7 +280,11 @@ fn runs_of(app: &App, project: &Project, limit: i64) -> anyhow::Result<Vec<RunRo
                 executed: r.get(1)?,
                 prototype: r.get(2)?,
                 source: r.get(3)?,
-                by: r.get(4)?,
+                // A public project never shows an email address.
+                by: {
+                    let by: String = r.get(4)?;
+                    if project.public && by.contains('@') { "a member".into() } else { by }
+                },
                 branch: r.get(5)?,
                 summary: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
                 flows: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
@@ -306,7 +310,7 @@ fn ago(epoch: i64) -> String {
 }
 
 fn nav<'a>(app: &'a App, site: &'a str, user: &'a User, projects: &'a [Project], project: &'a Project, section: &'a str) -> anyhow::Result<pages::Nav<'a>> {
-    Ok(pages::Nav { site, user, projects, current: Some(project), section, review_count: open_comment_count(app, project)? })
+    Ok(pages::Nav { site, user, projects, current: Some(project), section, review_count: open_comment_count(app, project)?, member: is_member(app, user, project)? })
 }
 
 struct FlowRow {
@@ -452,8 +456,7 @@ pub fn project_page(app: &App, user: &User, project: &Project) -> R {
 }
 
 pub async fn review_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}/review"))?;
-    let (project, _) = project_for(&app, &user, &slug)?;
+    let (user, project, _) = read_access(&app, &h, &format!("/{slug}/review"), &slug)?;
     let mut list = String::new();
     for f in flows_of(&app, &project)?.iter().filter(|f| matches!(f.stage.as_str(), "draft" | "review")) {
         let open = open_comments_on(&app, &project, &f.id)?;
@@ -484,8 +487,7 @@ pub async fn flows_redirect(Path(slug): Path<String>) -> Response {
 
 /// The flow documents as they were last published, with comments: what reviewers read.
 pub async fn flows_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}/flows/"))?;
-    let (project, _) = project_for(&app, &user, &slug)?;
+    let (_, project, _) = read_access(&app, &h, &format!("/{slug}/flows/"), &slug)?;
     let (docs, theme): (Vec<String>, Option<String>) = app.db.with(|c| {
         let mut st = c.prepare("SELECT doc FROM flows WHERE project_id = ?1 ORDER BY COALESCE(area, ''), title")?;
         let docs = st.query_map([project.id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
@@ -512,7 +514,8 @@ fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPa
     let comments: Vec<Value> = app.db.with(|c| {
         let mut st = c.prepare("SELECT c.flow_id, c.step_key, c.text, c.created_at, c.resolved_at, u.name, u.github_login, u.email FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 ORDER BY c.created_at")?;
         st.query_map([project.id], |r| {
-            let author: Option<String> = r.get::<_, Option<String>>(5)?.or(r.get(6)?).or(r.get(7)?);
+            let email: Option<String> = if project.public { Some("A reviewer".into()) } else { r.get(7)? };
+            let author: Option<String> = r.get::<_, Option<String>>(5)?.or(r.get(6)?).or(email);
             Ok(json!({ "flow": r.get::<_, String>(0)?, "step": r.get::<_, Option<String>>(1)?, "text": r.get::<_, String>(2)?, "at": r.get::<_, String>(3)?, "resolved": r.get::<_, Option<String>>(4)?.is_some(), "author": author }))
         })?
         .collect()
@@ -545,8 +548,7 @@ pub async fn run_redirect(Path((slug, run)): Path<(String, String)>) -> Response
 }
 
 pub async fn run_page(State(app): State<App>, h: HeaderMap, Path((slug, run)): Path<(String, String)>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}/runs/{run}/"))?;
-    let (project, _) = project_for(&app, &user, &slug)?;
+    let (_, project, _) = read_access(&app, &h, &format!("/{slug}/runs/{run}/"), &slug)?;
     let run = parse_run(&run)?;
     run_exists(&app, &project, run)?;
     let dir = run_dir(&app, project.id, run);
@@ -555,8 +557,7 @@ pub async fn run_page(State(app): State<App>, h: HeaderMap, Path((slug, run)): P
 }
 
 pub async fn run_asset(State(app): State<App>, h: HeaderMap, Path((slug, run, path)): Path<(String, String, String)>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}"))?;
-    let (project, _) = project_for(&app, &user, &slug)?;
+    let (_, project, _) = read_access(&app, &h, &format!("/{slug}"), &slug)?;
     let run = parse_run(&run)?;
     let rel = format!("assets/{path}");
     if !safe_asset_path(&rel) {

@@ -126,20 +126,29 @@ pub struct Nav<'a> {
     pub current: Option<&'a Project>,
     pub section: &'a str,
     pub review_count: usize,
+    /// Whether the person is on the current project (visitors to a public one aren't).
+    pub member: bool,
 }
 
 /// The app shell: the ink sidebar and a main column.
 pub fn shell(nav: &Nav, title: &str, main: &str) -> String {
-    let mut side = format!(r#"<nav class="side" aria-label="Projects and sections">{}<div class="h">Projects</div>"#, brand(nav.site));
+    let mut side = format!(r#"<nav class="side" aria-label="Projects and sections">{}"#, brand(nav.site));
+    if !nav.user.is_visitor() {
+        side.push_str(r#"<div class="h">Projects</div>"#);
+    }
     for p in nav.projects {
         let on = nav.current.is_some_and(|c| c.id == p.id);
         side.push_str(&format!(r#"<a class="proj{}" href="/{}"{}>{}</a>"#, if on { " on" } else { "" }, esc(&p.slug), if on { " aria-current=\"true\"" } else { "" }, esc(&p.name)));
     }
-    if nav.projects.is_empty() {
+    if nav.projects.is_empty() && !nav.user.is_visitor() {
         side.push_str(r#"<span style="padding:10px" class="small">No projects yet</span>"#);
     }
     if let Some(p) = nav.current {
-        side.push_str(&format!(r#"<div class="h">{}</div>"#, esc(&p.name)));
+        side.push_str(&format!(
+            r#"<div class="h">{}{}</div>"#,
+            esc(&p.name),
+            if p.public { r#" <span class="pill iris" title="Anyone with the link can read this project">Public</span>"# } else { "" }
+        ));
         let count = if nav.review_count > 0 { format!(r#"<span class="count">{}</span>"#, nav.review_count) } else { String::new() };
         for (key, label, href, extra) in [
             ("flows", "Flows and runs", format!("/{}", p.slug), String::new()),
@@ -147,11 +156,22 @@ pub fn shell(nav: &Nav, title: &str, main: &str) -> String {
             ("members", "Members", format!("/{}/members", p.slug), String::new()),
             ("publish", "Publishing", format!("/{}/publish", p.slug), String::new()),
         ] {
+            if !nav.member && matches!(key, "members" | "publish") {
+                continue;
+            }
             let on = nav.section == key;
             side.push_str(&format!(r#"<a href="{}" class="{}"{}>{}{extra}</a>"#, esc(&href), if on { "on" } else { "" }, if on { " aria-current=\"page\"" } else { "" }, label));
         }
     }
-    side.push_str(&format!(r#"<div class="me"><span>Signed in as {}</span><form method="post" action="/logout"><button type="submit">Sign out</button></form></div></nav>"#, esc(&nav.user.label())));
+    if nav.user.is_visitor() {
+        let next = nav.current.map(|p| format!("/{}", p.slug)).unwrap_or_else(|| "/".into());
+        side.push_str(&format!(r#"<div class="me"><span>Reading as a visitor</span><a href="/login?next={}" style="color:var(--lav)">Sign in</a></div></nav>"#, esc(&urlenc(&next))));
+    } else {
+        side.push_str(&format!(
+            r#"<div class="me"><span>Signed in as {}</span><form method="post" action="/logout"><button type="submit">Sign out</button></form></div></nav>"#,
+            esc(&nav.user.label())
+        ));
+    }
     doc(title, &format!(r#"<div class="shell">{side}<div class="main">{main}</div></div>"#))
 }
 

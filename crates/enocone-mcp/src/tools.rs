@@ -845,13 +845,14 @@ impl Enocone {
             Ok(t) => t,
             Err(e) => return Ok(fail(e)),
         };
-        let token = match Self::hub_token(&url).await {
-            Ok(t) => t,
-            Err(e) => return Ok(fail(e)),
-        };
-        match crate::hub::comments(&url, &token, &project, &a.id, a.all.unwrap_or(false)).await {
+        // A public project's comments can be read without signing in.
+        let token = Self::hub_token(&url).await;
+        match crate::hub::comments(&url, token.as_deref().ok(), &project, &a.id, a.all.unwrap_or(false)).await {
             Ok(v) => Ok(json_result(&v)),
-            Err(e) => Ok(fail(format!("{e:#}"))),
+            Err(e) => Ok(fail(match token {
+                Err(not_signed_in) => not_signed_in,
+                Ok(_) => format!("{e:#}"),
+            })),
         }
     }
 

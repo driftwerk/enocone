@@ -39,6 +39,9 @@ enocone validate
 enocone run --env local --open      # run and open the report
 enocone docs --open                 # the documents only, nothing runs
 enocone list                        # stage and implementation status per flow
+enocone list --stage draft          # what's waiting for review
+enocone approve quotes.accept       # stage: approved, approved_by: your git name and today's date
+enocone stage quotes.accept review  # move a flow to any stage
 enocone run --prototype             # browser steps against the mockups, before the feature exists
 enocone prototype --open            # click through the mockups
 enocone render-screen quote         # draw screens/quote.html with the theme, as a PNG
@@ -60,6 +63,10 @@ enocone --project examples/demo run --open
 | `implemented` (default) | every step has blocks | yes |
 
 `--fail-on-pending` makes pending steps fail the run.
+
+Approving is a person's change in git: `enocone approve` edits only the
+frontmatter and prints the `git commit` to record it. The MCP server can't
+approve; it asks you to.
 
 ## Designs in the document
 
@@ -139,6 +146,14 @@ The report shows the table with each row's result, and reviewers on the team
 site can comment on a single row. For data with parts, a second table links
 to the first: name them with `Table: orders` and `Table: items` lines, give
 `items` an `orders` column, and `{{row.items}}` is that order's items.
+
+## The team site
+
+`enocone serve` (or enoc.one) shares flows, runs and review comments with the
+team. Projects are private to their members. An owner can make an
+open-source project public on its Members page: anyone with the link can
+then read its flows, runs and comments (reviewers' email addresses are never
+shown), and only members can comment or publish.
 
 ## With an AI agent
 

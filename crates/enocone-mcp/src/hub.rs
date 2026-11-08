@@ -164,13 +164,13 @@ async fn error_text(res: reqwest::Response) -> String {
 }
 
 /// The open review comments on a flow (all of them with `all`).
-pub async fn comments(url: &str, token: &str, project: &str, flow_id: &str, all: bool) -> anyhow::Result<Value> {
-    let res = client()
-        .get(format!("{url}/api/projects/{}/flows/{}/comments{}", enocode(project), enocode(flow_id), if all { "?all=true" } else { "" }))
-        .bearer_auth(token)
-        .send()
-        .await
-        .with_context(|| format!("reaching {url}"))?;
+/// A flow's review comments. Without a token, only a public project answers.
+pub async fn comments(url: &str, token: Option<&str>, project: &str, flow_id: &str, all: bool) -> anyhow::Result<Value> {
+    let mut req = client().get(format!("{url}/api/projects/{}/flows/{}/comments{}", enocode(project), enocode(flow_id), if all { "?all=true" } else { "" }));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let res = req.send().await.with_context(|| format!("reaching {url}"))?;
     if !res.status().is_success() {
         bail!("{}", error_text(res).await);
     }

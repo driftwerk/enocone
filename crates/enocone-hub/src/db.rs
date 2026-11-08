@@ -108,6 +108,10 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA)?;
+        // Added after the first release: projects are private unless an owner makes them public.
+        if conn.prepare("SELECT public FROM projects LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE projects ADD COLUMN public INTEGER NOT NULL DEFAULT 0")?;
+        }
         Ok(Db(Arc::new(Mutex::new(conn))))
     }
 
@@ -126,6 +130,13 @@ pub struct User {
 }
 
 impl User {
+    /// Someone reading a public project without signing in.
+    pub fn visitor() -> User {
+        User { id: 0, email: None, github_login: None, name: Some("Visitor".into()) }
+    }
+    pub fn is_visitor(&self) -> bool {
+        self.id == 0
+    }
     pub fn label(&self) -> String {
         self.name.clone().or_else(|| self.github_login.clone()).or_else(|| self.email.clone()).unwrap_or_else(|| format!("user {}", self.id))
     }
@@ -153,15 +164,18 @@ pub struct Project {
     pub slug: String,
     pub name: String,
     pub repo: Option<String>,
+    /// Anyone with the link can read it; only members can change anything.
+    pub public: bool,
 }
 
 pub fn project_by_slug(c: &Connection, slug: &str) -> rusqlite::Result<Option<Project>> {
-    c.query_row("SELECT id, slug, name, repo FROM projects WHERE slug = ?1", [slug], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)? })).optional()
+    c.query_row("SELECT id, slug, name, repo, public FROM projects WHERE slug = ?1", [slug], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)? }))
+        .optional()
 }
 
 pub fn all_projects(c: &Connection) -> rusqlite::Result<Vec<Project>> {
-    let mut st = c.prepare("SELECT id, slug, name, repo FROM projects ORDER BY slug")?;
-    st.query_map([], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)? }))?.collect()
+    let mut st = c.prepare("SELECT id, slug, name, repo, public FROM projects ORDER BY slug")?;
+    st.query_map([], |r| Ok(Project { id: r.get(0)?, slug: r.get(1)?, name: r.get(2)?, repo: r.get(3)?, public: r.get(4)? }))?.collect()
 }
 
 pub fn teams_of(c: &Connection, user_id: i64) -> rusqlite::Result<Vec<String>> {

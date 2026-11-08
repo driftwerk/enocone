@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{self, Project, Role, User};
 use crate::pages::{self, esc};
-use crate::{App, Fail, R, project_for, require_user, same_origin, visible_projects};
+use crate::{App, Fail, R, project_for, read_access, require_user, same_origin, visible_projects};
 
 /// Markdown to HTML with raw HTML shown as text and only http(s)/mailto/relative links.
 pub fn md(src: &str) -> String {
@@ -125,8 +125,9 @@ struct Comment {
 
 fn comments(app: &App, project: &Project, flow_id: &str) -> anyhow::Result<Vec<Comment>> {
     app.db.with(|c| {
-        let mut st = c.prepare("SELECT c.id, c.step_key, c.quote, c.parent_id, COALESCE(u.name, u.github_login, u.email), c.text, c.flow_hash, c.created_at, c.resolved_at IS NOT NULL FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 AND c.flow_id = ?2 ORDER BY c.id")?;
-        st.query_map(params![project.id, flow_id], |r| Ok(Comment { id: r.get(0)?, step: r.get(1)?, quote: r.get(2)?, parent: r.get(3)?, author: r.get(4)?, text: r.get(5)?, hash: r.get(6)?, at: r.get(7)?, resolved: r.get(8)? }))?.collect()
+        let mut st = c.prepare("SELECT c.id, c.step_key, c.quote, c.parent_id, COALESCE(u.name, u.github_login, CASE WHEN ?3 THEN 'A reviewer' ELSE u.email END), c.text, c.flow_hash, c.created_at, c.resolved_at IS NOT NULL FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 AND c.flow_id = ?2 ORDER BY c.id")?;
+        // A public project never shows its reviewers' email addresses.
+        st.query_map(params![project.id, flow_id, project.public], |r| Ok(Comment { id: r.get(0)?, step: r.get(1)?, quote: r.get(2)?, parent: r.get(3)?, author: r.get(4)?, text: r.get(5)?, hash: r.get(6)?, at: r.get(7)?, resolved: r.get(8)? }))?.collect()
     })
 }
 
@@ -165,7 +166,7 @@ fn initial(name: &str) -> String {
     name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into())
 }
 
-fn render_comment(slug: &str, flow: &Flow, c: &Comment, replies: &[&Comment], can_resolve: bool) -> String {
+fn render_comment(slug: &str, flow: &Flow, c: &Comment, replies: &[&Comment], can_resolve: bool, can_reply: bool) -> String {
     let out = outdated(flow, c);
     let quote = c.quote.as_deref().filter(|q| !q.trim().is_empty()).map(|q| format!(r#"<blockquote style="margin:0;border-left:3px solid #F2C46D;padding:4px 10px;background:var(--amber-bg);border-radius:0 6px 6px 0;font-family:Fraunces,Georgia,serif">{}</blockquote>"#, esc(q))).unwrap_or_default();
     let mut reps = String::new();
@@ -178,7 +179,7 @@ fn render_comment(slug: &str, flow: &Flow, c: &Comment, replies: &[&Comment], ca
             md(&r.text)
         ));
     }
-    let actions = if c.resolved {
+    let actions = if c.resolved || !can_reply {
         String::new()
     } else {
         format!(
@@ -204,15 +205,16 @@ fn render_comment(slug: &str, flow: &Flow, c: &Comment, replies: &[&Comment], ca
 }
 
 pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, flow_id)): Path<(String, String)>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}/review/{flow_id}"))?;
-    let (project, role) = project_for(&app, &user, &slug)?;
+    let here = format!("/{slug}/review/{flow_id}");
+    let (user, project, role) = read_access(&app, &h, &here, &slug)?;
     let flow = load_flow(&app, &project, &flow_id)?;
     let all = comments(&app, &project, &flow.id)?;
-    let can_resolve = role >= Role::Member;
+    let can_resolve = role.is_some_and(|r| r >= Role::Member);
+    let can_comment = role.is_some();
     let top: Vec<&Comment> = all.iter().filter(|c| c.parent.is_none()).collect();
     let replies = |id: i64| all.iter().filter(|c| c.parent == Some(id)).collect::<Vec<_>>();
-    let open: Vec<String> = top.iter().filter(|c| !c.resolved).map(|c| render_comment(&project.slug, &flow, c, &replies(c.id), can_resolve)).collect();
-    let done: Vec<String> = top.iter().filter(|c| c.resolved).map(|c| render_comment(&project.slug, &flow, c, &replies(c.id), false)).collect();
+    let open: Vec<String> = top.iter().filter(|c| !c.resolved).map(|c| render_comment(&project.slug, &flow, c, &replies(c.id), can_resolve, can_comment)).collect();
+    let done: Vec<String> = top.iter().filter(|c| c.resolved).map(|c| render_comment(&project.slug, &flow, c, &replies(c.id), false, can_comment)).collect();
 
     // The document: why, steps, rules and other notes.
     let mut doc = format!(
@@ -265,6 +267,16 @@ pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, 
         slug = esc(&project.slug),
         flow = esc(&pages::urlenc(&flow.id)),
     );
+    let form = if can_comment {
+        form
+    } else if user.is_visitor() {
+        format!(
+            r#"<div class="panel" style="gap:8px"><b>Sign in to comment</b><span class="small muted">Only the project's members can comment.</span><a class="btn ghost" href="/login?next={}">Sign in</a></div>"#,
+            esc(&pages::urlenc(&here))
+        )
+    } else {
+        r#"<div class="panel"><span class="small muted">Only the project's members can comment. Ask an owner to invite you.</span></div>"#.to_string()
+    };
     let open_html = if open.is_empty() { r#"<div class="empty">No open comments.</div>"#.to_string() } else { open.join("") };
     let done_html = if done.is_empty() {
         String::new()
@@ -284,7 +296,8 @@ pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, 
     );
     let projects = visible_projects(&app, &user)?;
     let site = app.cfg.site();
-    let nav = pages::Nav { site: &site, user: &user, projects: &projects, current: Some(&project), section: "review", review_count: crate::runs::open_comment_count(&app, &project)? };
+    let nav =
+        pages::Nav { site: &site, user: &user, projects: &projects, current: Some(&project), section: "review", review_count: crate::runs::open_comment_count(&app, &project)?, member: can_comment };
     let head = pages::head(&format!("{} · Review", project.name), &esc(&flow.title), "", "");
     Ok(Html(pages::shell(&nav, &format!("Review: {} · {}", flow.title, project.name), &format!(r#"{head}<div class="body" style="max-width:1280px">{body}</div>"#))).into_response())
 }
@@ -310,10 +323,16 @@ pub async fn api_comments(State(app): State<App>, h: HeaderMap, Path((slug, flow
     use axum::Json;
     use axum::http::StatusCode;
     use serde_json::json;
-    let Some(user) = crate::runs::token_user(&app, &h)? else {
-        return Ok(crate::runs::api_error(StatusCode::UNAUTHORIZED, "Sign in with `enocone login`, or set ENOCONE_HUB_TOKEN."));
+    let public = app.db.with(|c| crate::db::project_by_slug(c, &slug))?.filter(|p| p.public);
+    let project = match (crate::runs::token_user(&app, &h)?, public) {
+        (Some(user), public) => match (project_for(&app, &user, &slug), public) {
+            (Ok((p, _)), _) | (Err(_), Some(p)) => p,
+            _ => return Ok(crate::runs::api_error(StatusCode::NOT_FOUND, "No such project, or you are not a member of it.")),
+        },
+        // A public project's comments can be read without signing in.
+        (None, Some(p)) => p,
+        (None, None) => return Ok(crate::runs::api_error(StatusCode::UNAUTHORIZED, "Sign in with `enocone login`, or set ENOCONE_HUB_TOKEN.")),
     };
-    let Ok((project, _)) = project_for(&app, &user, &slug) else { return Ok(crate::runs::api_error(StatusCode::NOT_FOUND, "No such project, or you are not a member of it.")) };
     let Ok(flow) = load_flow(&app, &project, &flow_id) else { return Ok(crate::runs::api_error(StatusCode::NOT_FOUND, "No such flow on this project; publish a run that includes it first.")) };
     let all = comments(&app, &project, &flow_id)?;
     let step_of = |k: Option<&str>| {

@@ -149,6 +149,7 @@ impl App {
             .route("/{slug}", get(project_page))
             .route("/{slug}/members", get(members_page).post(members_add))
             .route("/{slug}/members/remove", post(members_remove))
+            .route("/{slug}/visibility", post(set_visibility))
             .route("/{slug}/publish", get(runs::publish_page))
             .route("/{slug}/review", get(runs::review_page))
             .route("/{slug}/review/{flow}", get(review::flow_review_page))
@@ -205,6 +206,8 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
 
 pub(crate) enum Fail {
     NotFound,
+    /// Not found, for someone signed out: with a link to sign in and come back.
+    NotFoundSignIn(String),
     Forbidden(&'static str),
     Login(String),
     Bad(String),
@@ -221,6 +224,7 @@ impl IntoResponse for Fail {
     fn into_response(self) -> Response {
         match self {
             Fail::NotFound => (StatusCode::NOT_FOUND, Html(pages::doc("Not found", r#"<div class="cover gate"><main class="card"><div class="kicker">404</div><h1 class="serif" style="font-size:30px">Not found</h1><p class="lede" style="font-size:17px">There is nothing here, or you don't have access to it.</p><a class="btn ghost" href="/">Your projects</a></main></div>"#))).into_response(),
+            Fail::NotFoundSignIn(next) => (StatusCode::NOT_FOUND, Html(pages::doc("Not found", &format!(r#"<div class="cover gate"><main class="card"><div class="kicker">404</div><h1 class="serif" style="font-size:30px">Not found</h1><p class="lede" style="font-size:17px">There is nothing here, or you need to sign in to see it.</p><a class="btn iris" href="/login?next={}">Sign in</a></main></div>"#, esc(&pages::urlenc(&next)))))).into_response(),
             Fail::Forbidden(why) => (StatusCode::FORBIDDEN, Html(pages::doc("Not allowed", &format!(r#"<div class="cover gate"><main class="card"><div class="kicker">Not allowed</div><p class="lede">{}</p></main></div>"#, esc(why))))).into_response(),
             Fail::Login(next) => Redirect::to(&format!("/login?next={}", pages::urlenc(&next))).into_response(),
             Fail::Bad(m) => (StatusCode::BAD_REQUEST, Html(pages::doc("Bad request", &format!(r#"<div class="cover gate"><main class="card"><div class="kicker">Bad request</div><p class="lede">{}</p></main></div>"#, esc(&m))))).into_response(),
@@ -271,7 +275,41 @@ pub(crate) fn project_for(app: &App, user: &User, slug: &str) -> Result<(Project
     found.ok_or(Fail::NotFound)
 }
 
+/// Who may read a project's pages: members (with their role), and anyone,
+/// signed in or not, when the project is public (no role). Otherwise 404.
+pub(crate) fn read_access(app: &App, h: &HeaderMap, here: &str, slug: &str) -> Result<(User, Project, Option<Role>), Fail> {
+    let Some(user) = current_user(app, h)? else {
+        let public = app.db.with(|c| db::project_by_slug(c, slug))?.filter(|p| p.public);
+        return match public {
+            Some(p) => Ok((User::visitor(), p, None)),
+            None => Err(Fail::NotFoundSignIn(here.to_string())),
+        };
+    };
+    match project_for(app, &user, slug) {
+        Ok((p, r)) => Ok((user, p, Some(r))),
+        Err(Fail::NotFound) => match app.db.with(|c| db::project_by_slug(c, slug))?.filter(|p| p.public) {
+            Some(p) => Ok((user, p, None)),
+            None => Err(Fail::NotFound),
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether this person is on the project (or owns the site).
+pub(crate) fn is_member(app: &App, user: &User, project: &Project) -> anyhow::Result<bool> {
+    if user.is_visitor() {
+        return Ok(false);
+    }
+    if app.cfg.is_owner(user) {
+        return Ok(true);
+    }
+    app.db.with(|c| db::role_of(c, project.id, user)).map(|r| r.is_some())
+}
+
 pub(crate) fn visible_projects(app: &App, user: &User) -> anyhow::Result<Vec<Project>> {
+    if user.is_visitor() {
+        return Ok(Vec::new());
+    }
     app.db.with(|c| {
         let all = db::all_projects(c)?;
         if app.cfg.is_owner(user) {
@@ -547,7 +585,7 @@ async fn home(State(app): State<App>, h: HeaderMap) -> R {
     } else {
         ""
     };
-    let nav = pages::Nav { site: &app.cfg.site(), user: &user, projects: &projects, current: None, section: "", review_count: 0 };
+    let nav = pages::Nav { site: &app.cfg.site(), user: &user, projects: &projects, current: None, section: "", review_count: 0, member: true };
     let head = pages::head(&app.cfg.site(), r#"Your <em class="hl">projects</em>"#, "Flow documents, runs and review comments, shared with your team.", "");
     Ok(html(pages::shell(&nav, &format!("Projects · {}", app.cfg.site()), &format!(r#"{head}<div class="body"><div class="list">{list}</div>{create}</div>"#))))
 }
@@ -599,8 +637,7 @@ async fn create_project(State(app): State<App>, h: HeaderMap, Form(f): Form<NewP
 }
 
 async fn project_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>) -> R {
-    let user = require_user(&app, &h, &format!("/{slug}"))?;
-    let (project, _role) = project_for(&app, &user, &slug)?;
+    let (user, project, _role) = read_access(&app, &h, &format!("/{slug}"), &slug)?;
     runs::project_page(&app, &user, &project)
 }
 
@@ -647,15 +684,21 @@ async fn members_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<Str
         String::new()
     };
     let projects = visible_projects(&app, &user)?;
-    let nav = pages::Nav { site: &app.cfg.site(), user: &user, projects: &projects, current: Some(&project), section: "members", review_count: runs::open_comment_count(&app, &project)? };
+    let nav =
+        pages::Nav { site: &app.cfg.site(), user: &user, projects: &projects, current: Some(&project), section: "members", review_count: runs::open_comment_count(&app, &project)?, member: true };
     let head = pages::head(
         &format!("{} · Members", project.name),
         &format!(r#"Who can see <em class="hl">{}</em>"#, esc(&project.name)),
-        "Private to the people and GitHub teams below. Everyone else gets “not found”.",
+        if project.public {
+            "Public: anyone with the link can read it. Only the people and GitHub teams below can comment or publish."
+        } else {
+            "Private to the people and GitHub teams below. Everyone else gets “not found”."
+        },
         &invite,
     );
     let roles = r#"<div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))"><div class="panel" style="background:var(--ink);color:#fff;border:0"><b>Owner</b><span class="small" style="color:var(--lav2)">Members, roles, linked repository</span></div><div class="panel" style="background:var(--iris-bg);border:0;color:#2E2280"><b>Member</b><span class="small">Publishes runs, comments, resolves</span></div><div class="panel" style="background:var(--amber-bg);border:0;color:#5A3B06"><b>Reviewer</b><span class="small">Reads and comments</span></div></div>"#;
-    Ok(html(pages::shell(&nav, &format!("Members · {}", project.name), &format!(r#"{head}<div class="body">{roles}<div class="list" aria-label="Members">{list}</div></div>"#))))
+    let visibility = if can_manage { visibility_panel(&project) } else { String::new() };
+    Ok(html(pages::shell(&nav, &format!("Members · {}", project.name), &format!(r#"{head}<div class="body">{roles}<div class="list" aria-label="Members">{list}</div>{visibility}</div>"#))))
 }
 
 #[derive(Deserialize)]
@@ -737,5 +780,46 @@ async fn members_remove(State(app): State<App>, h: HeaderMap, Path(slug): Path<S
     if !ok {
         return Err(Fail::Bad("A project needs at least one owner.".into()));
     }
+    Ok(Redirect::to(&format!("/{}/members", project.slug)).into_response())
+}
+
+// ------------------------------------------------------------------ visibility
+
+fn visibility_panel(p: &Project) -> String {
+    let slug = esc(&p.slug);
+    if p.public {
+        format!(
+            r#"<section class="panel" aria-labelledby="vis" style="gap:10px"><h2 id="vis" class="serif" style="font-size:22px">Visibility: <span class="pill iris">Public</span></h2>
+<p class="small">Anyone with the link can read this project's flows, runs, screenshots and review comments. Only members can comment or publish.</p>
+<form method="post" action="/{slug}/visibility"><input type="hidden" name="public" value="0"><button class="btn ghost" type="submit">Make private</button></form></section>"#
+        )
+    } else {
+        format!(
+            r#"<section class="panel" aria-labelledby="vis" style="gap:10px"><h2 id="vis" class="serif" style="font-size:22px">Visibility: Private</h2>
+<p class="small">Only members can see this project. For an open-source project, you can make it public: anyone with the link could then read it, without signing in.</p>
+<div class="notice" role="note" style="background:var(--amber-bg);color:#5A3B06">Every run already published, with its screenshots, URLs and command output, and every review comment, becomes visible to anyone with the link. Check they hold nothing private first.</div>
+<form method="post" action="/{slug}/visibility" style="display:flex;flex-direction:column;gap:10px"><input type="hidden" name="public" value="1"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="understood" value="yes" required> <span>I understand that everything published here becomes public</span></label><button class="btn iris" type="submit">Make public</button></form></section>"#
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct VisibilityForm {
+    public: String,
+    understood: Option<String>,
+}
+
+async fn set_visibility(State(app): State<App>, h: HeaderMap, Path(slug): Path<String>, Form(f): Form<VisibilityForm>) -> R {
+    same_origin(&app, &h)?;
+    let user = require_user(&app, &h, &format!("/{slug}/members"))?;
+    let (project, role) = project_for(&app, &user, &slug)?;
+    if role != Role::Owner {
+        return Err(Fail::Forbidden("Only an owner can change who can see this project."));
+    }
+    let public = f.public == "1";
+    if public && f.understood.as_deref() != Some("yes") {
+        return Err(Fail::Bad("Tick the box to confirm you understand everything published becomes public.".into()));
+    }
+    app.db.with(|c| c.execute("UPDATE projects SET public = ?1 WHERE id = ?2", params![public, project.id]))?;
     Ok(Redirect::to(&format!("/{}/members", project.slug)).into_response())
 }
