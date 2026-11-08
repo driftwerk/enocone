@@ -87,7 +87,7 @@ jobs:
       - name: Update the Homebrew formula
         env:
           # A fine-grained token with Contents: read and write on driftwerk/homebrew-tap
-          # (the same kind workforce's release uses; the org has deploy keys turned off).
+          # (the org has deploy keys turned off).
           TAP_TOKEN: ${{ secrets.TAP_RELEASE_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
@@ -101,3 +101,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/enocone.rb
           if git commit -qm "enocone ${GITHUB_REF_NAME#v}"; then git push -q origin HEAD:main; else echo "formula unchanged"; fi
+      - name: Deploy to enoc.one
+        env:
+          # A fine-grained token with Contents: read and write on driftwerk/enocone-private,
+          # whose deploy workflow installs this release on the hosted site.
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            echo "::warning::DEPLOY_DISPATCH_TOKEN isn't set; enoc.one wasn't deployed."
+            exit 0
+          fi
+          curl -fsS -X POST -H "Authorization: Bearer $DEPLOY_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/driftwerk/enocone-private/dispatches \
+            -d "{\"event_type\": \"enocone-release\", \"client_payload\": {\"version\": \"${GITHUB_REF_NAME#v}\"}}"
+          echo "asked driftwerk/enocone-private to deploy ${GITHUB_REF_NAME#v}"
