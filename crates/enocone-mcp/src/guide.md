@@ -106,6 +106,11 @@ Rules of thumb:
 
 ## Blocks
 
+Give a block a title with a comment on its first line, saying what it does
+for the reader (`# Start a test site with Priya and Sam`). The report lists
+each block by its title, with the YAML folded away; without one it shows a
+summary of the command or the page it opens.
+
 ### `http`
 
 ```yaml
