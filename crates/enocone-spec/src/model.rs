@@ -234,7 +234,8 @@ pub fn cell_value(cell: &str) -> serde_json::Value {
     let t = cell.trim();
     let digits = t.strip_prefix('-').unwrap_or(t);
     let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
-    let numeric = !int.is_empty() && int.chars().all(|c| c.is_ascii_digit()) && (int == "0" || !int.starts_with('0')) && frac.chars().all(|c| c.is_ascii_digit()) && !(digits.contains('.') && frac.is_empty());
+    let numeric =
+        !int.is_empty() && int.chars().all(|c| c.is_ascii_digit()) && (int == "0" || !int.starts_with('0')) && frac.chars().all(|c| c.is_ascii_digit()) && !(digits.contains('.') && frac.is_empty());
     if numeric {
         if let Ok(n) = t.parse::<i64>() {
             return n.into();

@@ -475,7 +475,8 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
             Event::Start(Tag::List(_)) => list_depth += 1,
             Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
             Event::Start(Tag::Item) if list_depth == 1 && section_kind(&current).is_some() => {
-                pending = Some(Pending { line: line_of(range.start), text: String::new(), strong: String::new(), intent_done: false, notes: String::new(), blocks: vec![], designs: vec![], tables: vec![] });
+                pending =
+                    Some(Pending { line: line_of(range.start), text: String::new(), strong: String::new(), intent_done: false, notes: String::new(), blocks: vec![], designs: vec![], tables: vec![] });
             }
             Event::End(TagEnd::Item) if list_depth == 1 => {
                 if let (Some(p), Some(kind)) = (pending.take(), section_kind(&current)) {
@@ -830,14 +831,16 @@ fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Dia
                 let ids: std::collections::HashSet<String> = tables[0].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
                 for t in tables.iter_mut().skip(1) {
                     let Some(name) = t.name.clone() else {
-                        err(diags, t.line, format!("name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{{{row.<name>}}}}`"));
+                        err(diags, t.line, "name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{row.<name>}}`".to_string());
                         continue;
                     };
                     match t.columns.iter().position(|c| c.key == dkey) {
                         None => err(
                             diags,
                             t.line,
-                            format!("table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"),
+                            format!(
+                                "table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"
+                            ),
                         ),
                         Some(i) => {
                             t.link = Some(i);
