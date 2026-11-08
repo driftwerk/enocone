@@ -331,3 +331,5 @@ header.top .crumbs a:hover { background: rgba(185,172,255,.2); }
 .xtable tr.rdetail td { background: var(--surface); }
 .xtable .tname { margin-bottom: 4px; }
 .untitled { font-style: italic; opacity: .75; }
+.details.lbls { margin-bottom: -4px; }
+.sdetail > .blk { margin-bottom: 14px; }

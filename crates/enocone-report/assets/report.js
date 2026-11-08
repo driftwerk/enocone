@@ -573,6 +573,21 @@
     return (as ? `as ${as.split(":")[1].trim()} · ` : "") + (go ? `goto ${where}` : where) + (acts.length > 1 ? ` · ${acts.length} actions` : "");
   }
 
+  // Which records each block produced: http, exec and email blocks make one, a browser
+  // block a run of actions. Null when they can't be matched up (then shown together).
+  function recordsPerBlock(blocks, recs) {
+    const out = [];
+    let i = 0;
+    for (const b of blocks) {
+      const mine = [];
+      if (b.kind === "browser") { while (i < recs.length && recs[i].type === "action") mine.push(recs[i++]); }
+      else if (["http", "exec", "email"].includes(b.kind)) { if (i < recs.length && recs[i].type === b.kind) mine.push(recs[i++]); }
+      else return null;
+      out.push(mine);
+    }
+    return i === recs.length ? out : null;
+  }
+
   function happened(r) {
     const lines = [];
     const push = (t, c) => lines.push(c ? h("span", { class: c }, t + "\n") : t + "\n");
@@ -645,12 +660,28 @@
     const detail = h("div", { style: open ? "" : "display:none", class: "sdetail" });
     const fill = () => {
       detail.replaceChildren();
-      const cols = h("div", { class: "details" },
-        h("div", null, h("div", { class: "lbl" }, "As written"), s.blocks.map((b) => h("div", { class: "blk" },
-          h("div", { class: "blk-t" }, h("span", { class: "k" }, b.kind), " ", blockTitle(b)),
-          h("pre", { class: "code" }, b.source)))));
-      if (r && (r.records || []).length) cols.append(h("div", null, h("div", { class: "lbl" }, "What happened"), h("pre", { class: "term" }, happened(r))));
-      detail.append(cols);
+      const recs = r ? r.records || [] : [];
+      const per = recordsPerBlock(s.blocks, recs);
+      const many = s.blocks.length > 1;
+      const tail = r ? { records: [], captured: r.captured, page_url: r.page_url } : null;
+      if (per) {
+        // One row per block: its title across both columns, then what was written beside what it did.
+        detail.append(h("div", { class: "details lbls" }, h("div", { class: "lbl" }, "As written"), recs.length ? h("div", { class: "lbl" }, "What happened") : null));
+        s.blocks.forEach((b, i) => {
+          const last = i === s.blocks.length - 1;
+          const out = per[i].length || (last && tail && (tail.captured || []).length) ? happened(last ? { ...tail, records: per[i] } : { records: per[i] }) : null;
+          detail.append(h("div", { class: "blk" },
+            many ? h("div", { class: "blk-t" }, h("span", { class: "k" }, b.kind), " ", blockTitle(b)) : null,
+            h("div", { class: "details" }, h("pre", { class: "code" }, b.source), out ? h("pre", { class: "term" }, out) : h("div", null))));
+        });
+      } else {
+        const cols = h("div", { class: "details" },
+          h("div", null, h("div", { class: "lbl" }, "As written"), s.blocks.map((b) => h("div", { class: "blk" },
+            many ? h("div", { class: "blk-t" }, h("span", { class: "k" }, b.kind), " ", blockTitle(b)) : null,
+            h("pre", { class: "code" }, b.source)))));
+        if (recs.length) cols.append(h("div", null, h("div", { class: "lbl" }, "What happened"), h("pre", { class: "term" }, happened(r))));
+        detail.append(cols);
+      }
       if (r && r.snapshot) detail.append(h("details", null, h("summary", { class: "small" }, "Accessibility snapshot of the page at failure"), h("pre", { class: "code" }, r.snapshot)));
       if (r && (r.console || []).length) detail.append(h("details", null, h("summary", { class: "small" }, `Browser console (${r.console.length})`), h("pre", { class: "code" }, r.console.join("\n"))));
     };
