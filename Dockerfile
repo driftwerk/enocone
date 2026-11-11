@@ -7,7 +7,7 @@ COPY . .
 RUN cargo build --release --locked -p enocone-cli
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
 # The same layout as the release archives: the Playwright driver the build
 # assembled (Node plus its CLI) sits beside the binary, where it looks first.
 COPY --from=build /src/target/release/enocone /opt/enocone/enocone
