@@ -150,6 +150,10 @@ Tables that don't link to each other are separate lists of cases: the step
 runs for every row of each. Expected values can come from the row as well (`status: "{{row.status}}"`),
 so one table can state who gets 200, 403 or 404.
 
+A step, or each row of its table, can run only if a condition holds:
+`Only if: {{row.status}} == "Pending"`. When it doesn't, it's skipped, and the
+report shows the values it saw.
+
 A step can also repeat over a list captured earlier: a line
 `For each: {{old_ids}}` runs its blocks once per item, as `{{item}}`, so a
 setup flow can delete every old resource before creating a fresh one.

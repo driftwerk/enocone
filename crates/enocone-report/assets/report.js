@@ -760,6 +760,7 @@
         // Open a row to see what it sent and got back.
         const more = h("tr", { class: "rdetail", style: "display:none" }, h("td", { colspan: String(t.columns.length + 1) },
           err ? h("div", { class: "err" }, err.message) : null,
+          rr.result.note ? h("div", { class: "note" }, rr.result.note) : null,
           (rr.result.records || []).length ? h("pre", { class: "term" }, happened(rr.result)) : null));
         tr.classList.add("clickable");
         tr.title = "Show what this row sent and got back";
@@ -782,6 +783,7 @@
         h("td", { class: "res" }, st === "passed" ? [svg(ICON.check, 12), " passed"] : st === "failed" ? [svg(ICON.x, 12), " failed"] : statusLabel(st)));
       const more = h("tr", { class: "rdetail", style: "display:none" }, h("td", { colspan: "2" },
         err ? h("div", { class: "err" }, err.message) : null,
+        rr.result.note ? h("div", { class: "note" }, rr.result.note) : null,
         (rr.result.records || []).length ? h("pre", { class: "term" }, happened(rr.result)) : null));
       tr.onclick = () => { more.style.display = more.style.display === "none" ? "" : "none"; };
       return [tr, more];

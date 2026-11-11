@@ -335,6 +335,23 @@ its own.
 - `validate` rejects a `{{row.x}}` the table doesn't have, and a linked row
   whose id isn't in the first table. Tables outside steps are only text.
 
+## Steps that run only if a condition holds
+
+A line `Only if: <condition>` under a step's heading runs the step (or each
+row of its table) only when the condition holds; otherwise it is skipped,
+showing the values it saw. Skipped steps don't fail the flow.
+
+```markdown
+2. **Each pending person is invited again**
+
+   Only if: {{row.status}} == "Pending"
+```
+
+Compare with `== != < <= > >=` or `in ["a", "b"]`, and combine with `and`,
+`or`, `not` and parentheses. Values are `{{…}}` templates, quoted text,
+numbers and `true`/`false`. Text must be quoted: `== "Pending"`, not
+`== Pending`.
+
 ## Repeating a step over a captured list
 
 A line `For each: {{old_ids}}` under a step's heading runs its blocks once

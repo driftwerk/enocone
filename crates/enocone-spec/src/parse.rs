@@ -270,6 +270,10 @@ fn meta_from(value: &Value, diags: &mut Vec<Diagnostic>) -> (Option<String>, Flo
 pub fn parse_flow(path: &str, source: &str) -> Parsed {
     let mut diags = Vec::new();
     let (fm, body, body_line0) = split_frontmatter(source);
+    // `Only if:` lines are taken out before the Markdown is read (blanked, so
+    // offsets and lines stay put) and given to their steps afterwards.
+    let (body_text, only_ifs) = take_only_ifs(body);
+    let body = body_text.as_str();
     let (fm_id, meta) = match fm {
         Some((text, _)) => match parse_yaml(text) {
             Ok(v) => meta_from(&v, &mut diags),
@@ -388,7 +392,7 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
                 });
             }
         }
-        let step = Step { key, number: num, intent, notes, blocks: p.blocks, designs: p.designs, tables, for_each, line: p.line };
+        let step = Step { key, number: num, intent, notes, blocks: p.blocks, designs: p.designs, tables, for_each, only_if: None, line: p.line };
         match sections.last_mut() {
             Some(s) if s.kind == kind => s.steps.push(step),
             _ => sections.push(Section { kind, steps: vec![step] }),
@@ -696,7 +700,85 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
         source_hash: sha256(source),
         source: source.to_string(),
     };
+    let mut flow = flow;
+    attach_only_ifs(&mut flow, only_ifs.into_iter().map(|(l, c)| (body_line0 + l, c)).collect(), &mut diags);
     Parsed { flow, diagnostics: diags }
+}
+
+/// Blank each `Only if:` line inside a step (an indented line in a
+/// Given/When/Then/Cleanup section, outside code fences), returning the body
+/// and the lines taken: (1-based line within the body, condition).
+fn take_only_ifs(body: &str) -> (String, Vec<(usize, String)>) {
+    let mut out = String::with_capacity(body.len());
+    let mut taken = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut in_steps = false;
+    let mut step_started = false;
+    for (i, line) in body.split_inclusive('\n').enumerate() {
+        let t = line.trim_start();
+        let fence_of = |t: &str| -> Option<(char, usize)> {
+            let c = t.chars().next()?;
+            if c != '`' && c != '~' {
+                return None;
+            }
+            let n = t.chars().take_while(|&x| x == c).count();
+            (n >= 3).then_some((c, n))
+        };
+        if let Some((c, n)) = fence {
+            if let Some((c2, n2)) = fence_of(t)
+                && c2 == c
+                && n2 >= n
+                && t.trim_end().chars().all(|x| x == c)
+            {
+                fence = None;
+            }
+            out.push_str(line);
+            continue;
+        }
+        if let Some(f) = fence_of(t) {
+            fence = Some(f);
+            out.push_str(line);
+            continue;
+        }
+        if let Some(h) = line.strip_prefix("## ") {
+            let w = h.trim().to_lowercase();
+            in_steps = ["given", "when", "then", "cleanup"].iter().any(|k| w == *k || w.starts_with(&format!("{k} ")));
+            step_started = false;
+        } else if line.starts_with('#') {
+            in_steps = false;
+        } else if line.chars().next().is_some_and(|c| c.is_ascii_digit()) && line.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with(". ") {
+            step_started = true;
+        }
+        if in_steps && step_started && line.starts_with(char::is_whitespace) && t.starts_with("Only if:") {
+            taken.push((i + 1, t["Only if:".len()..].trim().to_string()));
+            out.extend(line.chars().map(|c| if c == '\n' { '\n' } else { ' ' }));
+            continue;
+        }
+        out.push_str(line);
+    }
+    (out, taken)
+}
+
+/// Give each `Only if:` line to the step it is under, and check it.
+fn attach_only_ifs(flow: &mut Flow, only_ifs: Vec<(usize, String)>, diags: &mut Vec<Diagnostic>) {
+    for (line, text) in only_ifs {
+        let Some(step) = flow.sections.iter_mut().flat_map(|s| s.steps.iter_mut()).filter(|s| s.line <= line).max_by_key(|s| s.line) else { continue };
+        if step.only_if.is_some() {
+            diags.push(Diagnostic { line, severity: Severity::Error, message: "a step can have one `Only if:` line; combine conditions with `and` / `or`".into() });
+            continue;
+        }
+        match crate::cond::parse(&text) {
+            Err(e) => diags.push(Diagnostic { line, severity: Severity::Error, message: format!("`Only if: {text}` can't be read: {e}") }),
+            Ok(c) => {
+                let vars: Vec<String> = c.variables();
+                if step.for_each.is_none() && vars.iter().any(|v| v == "item" || v.starts_with("item.")) {
+                    diags.push(Diagnostic { line, severity: Severity::Error, message: "`{{item}}` is the current item of a `For each:` step, but this step has no `For each: {{list}}` line".into() });
+                }
+                check_row_vars(&step.tables, vars.iter().map(|v| (v.clone(), line)), diags);
+            }
+        }
+        step.only_if = Some(text);
+    }
 }
 
 fn parse_design(kind: DesignKind, text: &str, line: usize, diags: &mut Vec<Diagnostic>) -> Design {
@@ -745,6 +827,46 @@ fn take_for_each(notes: &str, line: usize, diags: &mut Vec<Diagnostic>) -> (Stri
     };
     let left = format!("{} {}", &notes[..at], &rest[c.get(0).unwrap().end()..]);
     (left.trim().to_string(), Some(crate::model::ForEach { list: c[1].to_string(), max }))
+}
+
+/// `{{row.x}}` must name a column of every driving table, or a table linked to it.
+fn check_row_vars(tables: &[Table], vars: impl Iterator<Item = (String, usize)>, diags: &mut Vec<Diagnostic>) {
+    let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
+    let drivers: Vec<usize> = (0..tables.len()).filter(|&t| tables[t].link.is_none()).collect();
+    let known = |d: usize| -> Vec<String> {
+        tables[d].columns.iter().map(|c| c.key.clone()).chain(tables.iter().filter(|t| t.link.is_some() && t.parent == Some(d)).filter_map(|t| t.name.as_deref().map(column_key))).collect()
+    };
+    let mut said = std::collections::HashSet::new();
+    for (v, line) in vars {
+        let mut parts = v.split('.');
+        if parts.next() != Some("row") {
+            continue;
+        }
+        let col = parts.next().unwrap_or("");
+        if tables.is_empty() {
+            err(diags, line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
+            continue;
+        }
+        for &d in &drivers {
+            let k = known(d);
+            if k.iter().any(|x| x == col) || !said.insert((line, d, col.to_string())) {
+                continue;
+            }
+            if drivers.len() == 1 {
+                err(diags, line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", k.join(", ")));
+            } else {
+                let tn = tables[d].name.clone().map(|n| format!("table `{n}`")).unwrap_or_else(|| format!("table {}", d + 1));
+                err(
+                    diags,
+                    line,
+                    format!(
+                        "`{{{{{v}}}}}`: {tn} has no column `{col}` (columns: {}). The step's tables are independent (none has a column named after another), so each needs every column the blocks use",
+                        k.join(", ")
+                    ),
+                );
+            }
+        }
+    }
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -796,50 +918,27 @@ fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Dia
             }
         }
     }
-    // `{{row.x}}` must name a column of every driving table, or a table linked to it.
-    let drivers: Vec<usize> = (0..tables.len()).filter(|&t| tables[t].link.is_none()).collect();
-    let known = |d: usize| -> Vec<String> {
-        tables[d].columns.iter().map(|c| c.key.clone()).chain(tables.iter().filter(|t| t.link.is_some() && t.parent == Some(d)).filter_map(|t| t.name.as_deref().map(column_key))).collect()
-    };
-    for b in blocks {
-        let mut said = std::collections::HashSet::new();
-        for v in crate::template::variables(&b.value) {
-            let mut parts = v.split('.');
-            if parts.next() != Some("row") {
-                continue;
-            }
-            let col = parts.next().unwrap_or("");
-            if tables.is_empty() {
-                err(diags, b.line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
-                continue;
-            }
-            for &d in &drivers {
-                let k = known(d);
-                if k.iter().any(|x| x == col) || !said.insert((d, col.to_string())) {
-                    continue;
-                }
-                if drivers.len() == 1 {
-                    err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", k.join(", ")));
-                } else {
-                    let tn = tables[d].name.clone().map(|n| format!("table `{n}`")).unwrap_or_else(|| format!("table {}", d + 1));
-                    err(
-                        diags,
-                        b.line,
-                        format!(
-                            "`{{{{{v}}}}}`: {tn} has no column `{col}` (columns: {}). The step's tables are independent (none has a column named after another), so each needs every column the blocks use",
-                            k.join(", ")
-                        ),
-                    );
-                }
-            }
-        }
-    }
+    let vars: Vec<(String, usize)> = blocks.iter().flat_map(|b| crate::template::variables(&b.value).into_iter().map(move |v| (v, b.line))).collect();
+    check_row_vars(&tables, vars.into_iter(), diags);
     tables
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_if_lines_belong_to_their_step() {
+        let src = "---\nstage: implemented\n---\n# T\n\nWhy.\n\n## Rules\n\n- A rule\n  Only if: kept as text\n\n## When\n\n1. **Invite**\n   Only if: {{x}} == 1\n   ```exec\n   # Say hi\n   run: |\n     cat <<X\n     Only if: inside a fence\n     X\n   ```\n\n2. **Next**\n   ```exec\n   # Say hi\n   run: echo\n   ```\n";
+        let p = parse_flow("f.flow.md", src);
+        assert!(p.diagnostics.iter().all(|d| d.severity != Severity::Error), "{:?}", p.diagnostics);
+        let steps = &p.flow.sections[0].steps;
+        assert_eq!(steps[0].only_if.as_deref(), Some("{{x}} == 1"));
+        assert_eq!(steps[0].intent, "Invite");
+        assert!(steps[0].blocks[0].source.contains("Only if: inside a fence"));
+        assert_eq!(steps[1].only_if, None);
+        assert!(p.flow.notes[0].markdown.contains("Only if: kept as text"));
+    }
 
     #[test]
     fn for_each_lines() {

@@ -1,0 +1,8 @@
+# Used by enocone's own suite (e2e/flows/run/conditions.flow.md): steps and
+# rows that run only if a condition holds, against the fixture app's
+# /api/people and /api/invites.
+project = "conditions-fixture"
+default_env = "local"
+
+[env.local]
+API = "http://127.0.0.1:4010/api"

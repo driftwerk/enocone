@@ -386,6 +386,12 @@ impl Engine {
                     cases.push(Case { var: "item", value: v, row: i + 1, table: 0, table_name: None, label, line: step.line, prefix: format!("{prefix}item{}-", i + 1) });
                 }
             } else if step.tables.is_empty() {
+                if let Some(skip) = only_if(step, &st.vars) {
+                    return match skip {
+                        Ok(why) => StepResult { note: Some(why), ..step_note(step, Status::Skipped, started, None) },
+                        Err(e) => step_note(step, Status::Failed, started, Some(e)),
+                    };
+                }
                 return self.exec_step_once(st, step, prefix).await;
             } else {
                 let several = step.drivers().len() > 1;
@@ -409,7 +415,11 @@ impl Engine {
             for c in cases {
                 st.vars.captured = before.clone();
                 st.vars.set(c.var, c.value);
-                let result = self.exec_step_once(st, step, &c.prefix).await;
+                let result = match only_if(step, &st.vars) {
+                    None => self.exec_step_once(st, step, &c.prefix).await,
+                    Some(Ok(why)) => StepResult { note: Some(why), ..step_note(step, Status::Skipped, Instant::now(), None) },
+                    Some(Err(e)) => step_note(step, Status::Failed, Instant::now(), Some(e)),
+                };
                 rows.push(RowResult { row: c.row, table: c.table, table_name: c.table_name, label: c.label, line: c.line, result });
             }
             st.vars.captured = before;
@@ -861,4 +871,23 @@ fn item_label(v: &Value) -> String {
         other => value_preview(other),
     };
     if s.chars().count() > 60 { format!("{}…", s.chars().take(59).collect::<String>()) } else { s }
+}
+
+/// A step's `Only if:` condition, checked now: None to run, Ok(why) to skip,
+/// Err when it can't be checked.
+fn only_if(step: &Step, vars: &Vars) -> Option<Result<String, String>> {
+    let text = step.only_if.as_deref()?;
+    let cond = match enocone_spec::cond::parse(text) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(format!("`Only if: {text}` can't be read: {e}"))),
+    };
+    match cond.eval(vars) {
+        Ok((true, _)) => None,
+        Ok((false, seen)) => {
+            let saw: Vec<String> = seen.iter().map(|(name, v)| format!("{} was {}", name.rsplit('.').next().unwrap_or(name), vars.masker.mask(&v.to_string()))).collect();
+            let saw = if saw.is_empty() { String::new() } else { format!(": {}", saw.join(", ")) };
+            Some(Ok(format!("skipped: only if {text}{saw}")))
+        }
+        Err(e) => Some(Err(format!("`Only if: {text}`: {e}"))),
+    }
 }

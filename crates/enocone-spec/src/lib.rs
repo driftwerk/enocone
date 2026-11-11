@@ -5,6 +5,7 @@
 //! it executable. The same document, plus run results, is the report.
 
 pub mod blocks;
+pub mod cond;
 pub mod design;
 pub mod model;
 pub mod parse;

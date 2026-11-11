@@ -176,6 +176,9 @@ pub struct Step {
     /// A `For each: {{list}}` line: the blocks run once per item of the list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub for_each: Option<ForEach>,
+    /// An `Only if: <condition>` line: the step (or each row) runs only when it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_if: Option<String>,
     /// 1-based line of the step in the source.
     pub line: usize,
 }
