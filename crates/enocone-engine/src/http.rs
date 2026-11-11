@@ -73,11 +73,50 @@ async fn send(client: &reqwest::Client, spec: &HttpSpec, auth: &[(String, String
 /// several nodes counts the matches, however many there are; everything else
 /// sees [`json_at`].
 pub fn json_for(root: &Value, path: &str, m: &enocone_spec::blocks::Matcher) -> Option<Value> {
-    if m.counts() && is_multi(path) {
+    if m.counts() && ends_multi(path) {
         let p = serde_json_path::JsonPath::parse(path).ok()?;
         return Some(Value::Array(p.query(root).all().into_iter().cloned().collect()));
     }
     json_at(root, path)
+}
+
+/// Whether a JSONPath's last segment can select several nodes, so `len` on it
+/// means "how many": `$[?@.a == 1]`, `$.items[*]`, `$..id`. A path that ends
+/// on one field (`$.flows[?…].rows`) measures that field's value instead.
+pub fn ends_multi(path: &str) -> bool {
+    let (mut quote, mut depth, mut prev) = (None::<char>, 0usize, '\0');
+    let (mut start, mut desc) = (0usize, false);
+    for (i, c) in path.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q && prev != '\\' {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '[' => {
+                    if depth == 0 && prev != '.' {
+                        start = i;
+                        desc = false;
+                    }
+                    depth += 1;
+                }
+                ']' => depth = depth.saturating_sub(1),
+                '.' if depth == 0 => {
+                    if prev == '.' {
+                        desc = true;
+                    } else {
+                        start = i;
+                        desc = false;
+                    }
+                }
+                _ => {}
+            },
+        }
+        prev = c;
+    }
+    desc || is_multi(&format!("${}", &path[start..]))
 }
 
 /// Whether a JSONPath can match more than one node: it has a filter, a
@@ -294,6 +333,19 @@ mod len_tests {
         assert_eq!(json_at(&body, "$[?@.name == 'a'].x"), Some(json!(1)));
         // A singular path keeps measuring the value itself.
         assert_eq!(len("$[0]", 3), Ok(()));
+        // A filter in the middle, ending on one field: measures that field.
+        let doc = json!({ "flows": [{ "id": "a", "rows": [1, 2, 3, 4] }, { "id": "b", "rows": [] }] });
+        assert_eq!(Matcher::Len(4).check(json_for(&doc, "$.flows[?(@.id=='a')].rows", &Matcher::Len(4)).as_ref()), Ok(()));
+    }
+
+    #[test]
+    fn last_segment_decides() {
+        for p in ["$[?@.a == 1]", "$.items[*]", "$..id", "$.x[0:2]", "$.*", "$.a[?@.b]"] {
+            assert!(ends_multi(p), "{p}");
+        }
+        for p in ["$.a.b", "$[?@.a == 1].rows", "$.flows[?(@.id=='a')].attempts[0].steps[0].rows", "$['x?y']", "$[*].id"] {
+            assert!(!ends_multi(p), "{p}");
+        }
     }
 
     #[test]
