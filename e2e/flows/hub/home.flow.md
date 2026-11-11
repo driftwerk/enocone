@@ -38,7 +38,7 @@ flowchart LR
    # Start a test site with a GitHub app and a project
    run: |
      BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" GH_CLIENT=fixture-github-client sh "{{env.FIXTURES}}/hub/start.sh" 18186 "{{run.tmp}}/site"
-     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18186 "{{run.tmp}}/site" project:shop:Shop "invite:shop:sam+{{run.short_id}}@example.test:reviewer"
+     BIN="{{env.ENOCONE_BIN}}" WEB="{{env.WEB}}" OWNER="owner+{{run.short_id}}@example.test" sh "{{env.FIXTURES}}/hub/seed.sh" 18186 "{{run.tmp}}/site" project:shop:Shop "invite:shop:sam-home+{{run.short_id}}@example.test:reviewer"
    expect: { stdout: seeded }
    ```
    ```browser
@@ -69,7 +69,7 @@ flowchart LR
 3. **Sam asks for a sign-in link from the home page's card**
    ```browser
    - expect: { link: Continue with GitHub }
-   - fill: { label: Work email, value: "sam+{{run.short_id}}@example.test" }
+   - fill: { label: Work email, value: "sam-home+{{run.short_id}}@example.test" }
    - click: Email me a sign-in link
    - expect: "a sign-in link is on its way"
    ```
