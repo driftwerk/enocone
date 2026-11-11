@@ -98,7 +98,7 @@ async fn publish_from_ci(app: &App, jwt: &str, slug: &str, body: Result<Json<Pub
         Err(e) => return Ok(api_error(StatusCode::BAD_REQUEST, &format!("The upload isn't valid JSON: {e}"))),
     };
     let by = if claims.actor.is_empty() { "GitHub Actions".to_string() } else { format!("{} via GitHub Actions", claims.actor) };
-    store_run(app, &project, &by, "ci", body.results, body.files)
+    store_run(app, &project, &by, "ci", claims.workflow().as_deref(), body.results, body.files)
 }
 
 /// Runs of a project, newest first (for tokens of its members).
@@ -130,11 +130,11 @@ pub async fn publish(State(app): State<App>, h: HeaderMap, Path(slug): Path<Stri
         Some("ci") => "ci",
         _ => "cli",
     };
-    store_run(&app, &project, &user.label(), source, body.results, body.files)
+    store_run(&app, &project, &user.label(), source, None, body.results, body.files)
 }
 
 /// Validate and store a run; shared by token and CI publishing.
-pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, results: Value, files: BTreeMap<String, String>) -> R {
+pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, via: Option<&str>, results: Value, files: BTreeMap<String, String>) -> R {
     if results.get("schema").and_then(Value::as_str) != Some(RESULTS_SCHEMA) {
         return Ok(api_error(StatusCode::UNPROCESSABLE_ENTITY, &format!("results.json must have \"schema\": \"{RESULTS_SCHEMA}\"; update enocone and run again.")));
     }
@@ -181,8 +181,8 @@ pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, re
     let summary = serde_json::to_string(&data.summary)?;
     let run_id = app.db.with(|c| {
         c.execute(
-            "INSERT INTO runs (project_id, run_id, executed, prototype, source, published_by, branch, commit_sha, summary, flows, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![project.id, data.run.id, data.run.executed, data.run.prototype, source, by, data.run.git_branch, data.run.git_commit, summary, serde_json::to_string(&flows).unwrap(), db::epoch()],
+            "INSERT INTO runs (project_id, run_id, executed, prototype, source, published_by, branch, commit_sha, summary, flows, created_at, published_via) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![project.id, data.run.id, data.run.executed, data.run.prototype, source, by, data.run.git_branch, data.run.git_commit, summary, serde_json::to_string(&flows).unwrap(), db::epoch(), via],
         )?;
         let run_id = c.last_insert_rowid();
         for f in &data.flows {
@@ -217,6 +217,117 @@ pub(crate) fn store_run(app: &App, project: &Project, by: &str, source: &str, re
     }
     let url = format!("{}/{}/runs/{run_id}/", app.cfg.origin(), project.slug);
     Ok((StatusCode::CREATED, Json(json!({ "id": run_id, "url": url, "screenshots": pngs.len() }))).into_response())
+}
+
+// ------------------------------------------------------------------ deleting runs
+
+/// Remove a run: its row, results and screenshots, and record who did it.
+fn delete_run(app: &App, project: &Project, run: i64, by: &str) -> anyhow::Result<()> {
+    let run_id: String = app.db.with(|c| c.query_row("SELECT run_id FROM runs WHERE id = ?1 AND project_id = ?2", params![run, project.id], |r| r.get(0)))?;
+    let _ = std::fs::remove_dir_all(run_dir(app, project.id, run));
+    app.db.with(|c| {
+        c.execute("DELETE FROM runs WHERE id = ?1", [run])?;
+        c.execute("INSERT INTO run_deletions (project_id, run, run_id, deleted_by, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5)", params![project.id, run, run_id, by, db::now()])
+    })?;
+    Ok(())
+}
+
+/// `DELETE /api/projects/{slug}/runs/{id}`: from an owner's token, or from the
+/// CI workflow that published the run.
+pub async fn api_delete_run(State(app): State<App>, h: HeaderMap, Path((slug, run)): Path<(String, String)>) -> R {
+    let Ok(run) = run.parse::<i64>() else { return Ok(api_error(StatusCode::NOT_FOUND, "No such run.")) };
+    if let Some(jwt) = auth::bearer(&h).filter(|t| looks_like_jwt(t)) {
+        let claims = match app.oidc.verify(&jwt, &app.cfg.origin()).await {
+            Ok(c) => c,
+            Err(why) => return Ok(api_error(StatusCode::UNAUTHORIZED, &format!("GitHub's token wasn't accepted: {why}"))),
+        };
+        let repo = claims.repository.to_lowercase();
+        let Some(project) = app.db.with(|c| db::project_by_slug(c, &slug))?.filter(|p| p.repo.as_deref() == Some(repo.as_str())) else {
+            return Ok(api_error(StatusCode::FORBIDDEN, &format!("A workflow in {repo} can't delete runs of {slug}: the project isn't linked to that repository.")));
+        };
+        let via: Option<Option<String>> = app.db.with(|c| c.query_row("SELECT published_via FROM runs WHERE id = ?1 AND project_id = ?2", params![run, project.id], |r| r.get(0)).optional())?;
+        let Some(via) = via else { return Ok(api_error(StatusCode::NOT_FOUND, "No such run.")) };
+        if via.is_none() || via != claims.workflow() {
+            return Ok(api_error(StatusCode::FORBIDDEN, "A workflow can delete only the runs it published; a project owner can delete any run."));
+        }
+        let by = if claims.actor.is_empty() { "GitHub Actions".to_string() } else { format!("{} via GitHub Actions", claims.actor) };
+        delete_run(&app, &project, run, &by)?;
+        return Ok(Json(json!({ "deleted": run })).into_response());
+    }
+    let Some(user) = token_user(&app, &h)? else { return Ok(api_error(StatusCode::UNAUTHORIZED, "Sign in with `enocone login`, or set ENOCONE_HUB_TOKEN.")) };
+    let project = match project_for(&app, &user, &slug) {
+        Ok((p, Role::Owner)) => p,
+        Ok(_) => return Ok(api_error(StatusCode::FORBIDDEN, "Only project owners can delete runs.")),
+        Err(_) => return Ok(api_error(StatusCode::NOT_FOUND, "No such project, or you are not a member of it.")),
+    };
+    if run_exists(&app, &project, run).is_err() {
+        return Ok(api_error(StatusCode::NOT_FOUND, "No such run."));
+    }
+    delete_run(&app, &project, run, &user.label())?;
+    Ok(Json(json!({ "deleted": run })).into_response())
+}
+
+/// The owner's project and the run, for the delete pages.
+fn owned_run(app: &App, h: &HeaderMap, slug: &str, run: &str) -> Result<(User, Project, i64), Fail> {
+    let user = require_user(app, h, &format!("/{slug}/runs/{run}/"))?;
+    let (project, role) = project_for(app, &user, slug)?;
+    if role != Role::Owner {
+        return Err(Fail::Forbidden("Only project owners can delete runs."));
+    }
+    let run = parse_run(run)?;
+    run_exists(app, &project, run)?;
+    Ok((user, project, run))
+}
+
+/// Ask before deleting: the page names the run and says it can't be undone.
+pub async fn delete_run_page(State(app): State<App>, h: HeaderMap, Path((slug, run)): Path<(String, String)>) -> R {
+    let (user, project, run) = owned_run(&app, &h, &slug, &run)?;
+    let (run_id, by, created): (String, String, i64) =
+        app.db.with(|c| c.query_row("SELECT run_id, published_by, created_at FROM runs WHERE id = ?1", [run], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))?;
+    let projects = visible_projects(&app, &user)?;
+    let site = app.cfg.site();
+    let nav = nav(&app, &site, &user, &projects, &project, "runs")?;
+    let head = pages::head(&format!("{} · Delete run", project.name), r#"Delete <em class="hl">this run</em>?"#, "", "");
+    let body = format!(
+        r#"<section class="panel" aria-labelledby="del-h" style="gap:12px;max-width:640px"><h2 id="del-h" class="serif" style="font-size:22px">Delete run {run}</h2>
+<p style="margin:0">Run <b>{run_id}</b>, published by {by} {ago}. Its page, report and screenshots will be removed from the site at once. <b>This can't be undone.</b></p>
+<p class="small muted" style="margin:0">The flow documents and review comments stay: they belong to the project.</p>
+<form method="post" action="/{slug}/runs/{run}/delete" style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn danger" type="submit">Delete run {run}</button><a class="btn ghost" href="/{slug}/runs/{run}/">Keep it</a></form></section>"#,
+        run_id = esc(&run_id),
+        by = esc(&by),
+        ago = ago(created),
+        slug = esc(&project.slug),
+    );
+    Ok(axum::response::Html(pages::shell(&nav, &format!("Delete run · {}", project.name), &format!(r#"{head}<div class="body">{body}</div>"#))).into_response())
+}
+
+pub async fn delete_run_post(State(app): State<App>, h: HeaderMap, Path((slug, run)): Path<(String, String)>) -> R {
+    same_origin(&app, &h)?;
+    let (user, project, run) = owned_run(&app, &h, &slug, &run)?;
+    delete_run(&app, &project, run, &user.label())?;
+    Ok(Redirect::to(&format!("/{}", project.slug)).into_response())
+}
+
+/// Recent deletions, for the Publishing page.
+fn deletions_html(app: &App, project: &Project) -> anyhow::Result<String> {
+    let rows: Vec<(i64, String, String, String)> = app.db.with(|c| {
+        let mut st = c.prepare("SELECT run, run_id, deleted_by, deleted_at FROM run_deletions WHERE project_id = ?1 ORDER BY id DESC LIMIT 50")?;
+        st.query_map([project.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect()
+    })?;
+    if rows.is_empty() {
+        return Ok(String::new());
+    }
+    let mut list = String::new();
+    for (run, run_id, by, at) in rows {
+        let by = if project.public { "A project owner".to_string() } else { by };
+        list.push_str(&format!(
+            r#"<div class="row"><span class="t"><b style="font-family:Inter,sans-serif;font-size:15px">Run {run} deleted</b><span class="small muted">{run_id}</span></span><span class="small">by {by} on {at}</span></div>"#,
+            run_id = esc(&run_id),
+            by = esc(&by),
+            at = esc(&at.replace('T', " ").trim_end_matches('Z').chars().take(16).collect::<String>()),
+        ));
+    }
+    Ok(format!(r#"<section aria-labelledby="del-h" style="display:flex;flex-direction:column;gap:12px"><h2 id="del-h" class="sec">Deleted runs</h2><div class="list">{list}</div></section>"#))
 }
 
 fn status_class(s: Status) -> &'static str {
@@ -506,11 +617,11 @@ pub async fn flows_page(State(app): State<App>, h: HeaderMap, Path(slug): Path<S
         flows,
         theme,
     };
-    report_page(&app, &project, &results, &app.cfg.data)
+    report_page(&app, &project, &results, &app.cfg.data, None)
 }
 
 /// A report page for `results`, with the project's comments, under a CSP that allows only the report's own script.
-fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPath) -> R {
+fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPath, delete_url: Option<String>) -> R {
     let comments: Vec<Value> = app.db.with(|c| {
         let mut st = c.prepare("SELECT c.flow_id, c.step_key, c.text, c.created_at, c.resolved_at, u.name, u.github_login, u.email FROM comments c JOIN users u ON u.id = c.author_id WHERE c.project_id = ?1 ORDER BY c.created_at")?;
         st.query_map([project.id], |r| {
@@ -522,7 +633,7 @@ fn report_page(app: &App, project: &Project, results: &RunResults, assets: &FsPa
     })?;
     let mut extra = serde_json::Map::new();
     extra.insert("comments".into(), Value::Array(comments));
-    extra.insert("hub".into(), json!({ "site": app.cfg.site(), "home": "/", "project": project.name, "project_url": format!("/{}", project.slug), "review_url": format!("/{}/review", project.slug), "retention_days": app.cfg.run_retention_days }));
+    extra.insert("hub".into(), json!({ "site": app.cfg.site(), "home": "/", "project": project.name, "project_url": format!("/{}", project.slug), "review_url": format!("/{}/review", project.slug), "retention_days": app.cfg.run_retention_days, "delete_url": delete_url }));
     let html = enocone_report::render_html_with(results, assets, &enocone_report::ReportOptions { inline_assets: false }, extra)?;
     let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(enocone_report::inline_script().as_bytes()));
     let csp = format!(
@@ -548,12 +659,13 @@ pub async fn run_redirect(Path((slug, run)): Path<(String, String)>) -> Response
 }
 
 pub async fn run_page(State(app): State<App>, h: HeaderMap, Path((slug, run)): Path<(String, String)>) -> R {
-    let (_, project, _) = read_access(&app, &h, &format!("/{slug}/runs/{run}/"), &slug)?;
+    let (_, project, role) = read_access(&app, &h, &format!("/{slug}/runs/{run}/"), &slug)?;
     let run = parse_run(&run)?;
     run_exists(&app, &project, run)?;
     let dir = run_dir(&app, project.id, run);
     let results: RunResults = serde_json::from_slice(&std::fs::read(dir.join("results.json"))?)?;
-    report_page(&app, &project, &results, &dir)
+    let delete_url = (role == Some(Role::Owner)).then(|| format!("/{}/runs/{run}/delete", project.slug));
+    report_page(&app, &project, &results, &dir, delete_url)
 }
 
 pub async fn run_asset(State(app): State<App>, h: HeaderMap, Path((slug, run, path)): Path<(String, String, String)>) -> R {
@@ -657,7 +769,7 @@ fn render_publish(app: &App, h: &HeaderMap, slug: &str, new_token: Option<&str>)
         "A run sends its results and screenshots, never HTML: this site draws every page itself.",
         "",
     );
-    let body = publish_body(app, &user, &project, new_token)?;
+    let body = publish_body(app, &user, &project, new_token)? + &deletions_html(app, &project)?;
     Ok(axum::response::Html(pages::shell(&nav, &format!("Publishing · {}", project.name), &format!(r#"{head}<div class="body">{body}</div>"#))).into_response())
 }
 

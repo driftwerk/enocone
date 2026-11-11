@@ -162,7 +162,7 @@
     } }, "Theme");
     return h("header", { class: "top" }, h("div", { class: "in" },
       h("a", { class: "brand", href: HUB ? HUB.home : "#", "aria-label": HUB ? HUB.site : "enocone" }, logo(), wordmark()),
-      HUB ? h("nav", { class: "crumbs", "aria-label": "Breadcrumb" }, h("a", { href: HUB.project_url }, "← " + HUB.project), h("a", { href: HUB.review_url }, "Review")) : null,
+      HUB ? h("nav", { class: "crumbs", "aria-label": "Breadcrumb" }, h("a", { href: HUB.project_url }, "← " + HUB.project), h("a", { href: HUB.review_url }, "Review"), HUB.delete_url ? h("a", { href: HUB.delete_url, class: "danger" }, "Delete run") : null) : null,
       h("nav", { class: "meta", "aria-label": "Run" }, meta),
       h("div", { class: "top-actions" }, extra, run.ci_url ? h("a", { href: run.ci_url, target: "_blank", rel: "noopener" }, "CI run") : null, toggle)));
   }

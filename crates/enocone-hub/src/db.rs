@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS comments (
   resolved_by INTEGER REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS comments_flow ON comments(project_id, flow_id);
+CREATE TABLE IF NOT EXISTS run_deletions (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run INTEGER NOT NULL,
+  run_id TEXT NOT NULL,
+  deleted_by TEXT NOT NULL,
+  deleted_at TEXT NOT NULL
+);
 "#;
 
 impl Db {
@@ -114,6 +122,10 @@ impl Db {
         }
         if conn.prepare("SELECT hide_from_search FROM projects LIMIT 0").is_err() {
             conn.execute_batch("ALTER TABLE projects ADD COLUMN hide_from_search INTEGER NOT NULL DEFAULT 0")?;
+        }
+        // The CI workflow that published a run (repo/.github/workflows/file), so it can delete it.
+        if conn.prepare("SELECT published_via FROM runs LIMIT 0").is_err() {
+            conn.execute_batch("ALTER TABLE runs ADD COLUMN published_via TEXT")?;
         }
         Ok(Db(Arc::new(Mutex::new(conn))))
     }

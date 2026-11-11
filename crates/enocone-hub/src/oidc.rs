@@ -19,6 +19,17 @@ pub struct Claims {
     pub event_name: String,
     #[serde(default)]
     pub actor: String,
+    /// `owner/repo/.github/workflows/ci.yml@refs/heads/main`.
+    #[serde(default)]
+    pub workflow_ref: String,
+}
+
+impl Claims {
+    /// The workflow behind the token, without its ref: `owner/repo/.github/workflows/ci.yml`.
+    pub fn workflow(&self) -> Option<String> {
+        let w = self.workflow_ref.split('@').next().unwrap_or("").trim().to_lowercase();
+        (!w.is_empty()).then_some(w)
+    }
 }
 
 pub struct Verifier {

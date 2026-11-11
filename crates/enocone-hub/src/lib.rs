@@ -161,6 +161,8 @@ impl App {
             .route("/{slug}/runs/{run}", get(runs::run_redirect))
             .route("/{slug}/runs/{run}/", get(runs::run_page))
             .route("/{slug}/runs/{run}/assets/{*path}", get(runs::run_asset))
+            .route("/{slug}/runs/{run}/delete", get(runs::delete_run_page).post(runs::delete_run_post))
+            .route("/api/projects/{slug}/runs/{run}", axum::routing::delete(runs::api_delete_run))
             .layer(axum::middleware::from_fn_with_state(self.clone(), security_headers))
             .with_state(self)
     }

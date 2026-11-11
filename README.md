@@ -166,6 +166,11 @@ open-source project public on its Members page: anyone with the link can
 then read its flows, runs and comments (reviewers' email addresses are never
 shown), and only members can comment or publish.
 
+Runs are kept for 30 days. An owner can delete a run at once from its page
+(for example, one that recorded something it shouldn't), or through
+`DELETE /api/projects/<slug>/runs/<id>`, which also accepts the CI workflow
+that published the run. The Publishing page records who deleted what.
+
 ## With an AI agent
 
 `enocone init` writes a `.mcp.json` that runs `enocone mcp` (stdio). The server provides:

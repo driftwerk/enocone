@@ -395,7 +395,7 @@ async fn oidc_token(h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> R
         "iss": issuer(&h), "aud": q.get("aud_override").cloned().unwrap_or_else(|| get("audience", "")), "sub": format!("repo:{repo}:ref:{}", get("ref", "refs/heads/main")),
         "repository": repo, "repository_owner": repo.split('/').next().unwrap_or(""), "event_name": get("event_name", "push"),
         "ref": get("ref", "refs/heads/main"), "sha": "0123456789abcdef0123456789abcdef01234567", "actor": get("actor", "dev"),
-        "workflow": "e2e", "run_id": "1", "iat": now, "nbf": now, "exp": now + get("ttl", "300").parse::<u64>().unwrap_or(300),
+        "workflow": "e2e", "workflow_ref": format!("{repo}/.github/workflows/{}@{}", get("workflow", "e2e.yml"), get("ref", "refs/heads/main")), "run_id": "1", "iat": now, "nbf": now, "exp": now + get("ttl", "300").parse::<u64>().unwrap_or(300),
     });
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     header.kid = Some(OIDC_KID.into());
