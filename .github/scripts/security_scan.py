@@ -122,9 +122,24 @@ def render(title, scans, errors):
             where = f" in `{v['where']}`" if scan["target"].startswith("source:") else ""
             lines.append(f"- **CRITICAL** {v['id']}: {v['package']} {v['installed']} (fixed in {v['fixed']}){where}")
         if unfixed:
-            lines.append(f"- {unfixed} CRITICAL with no fix released yet")
+            lines.append(f"- {unfixed} CRITICAL with no fix released yet:")
+            for v in scan["vulns"]:
+                if v["severity"] == "CRITICAL" and not v["fixed"]:
+                    lines.append(f"  - {v['id']}: {v['package']} {v['installed']}")
         if high:
-            lines.append(f"- {high} HIGH")
+            fixable = sum(1 for v in scan["vulns"] if v["severity"] == "HIGH" and v["fixed"])
+            lines.append(f"- {high} HIGH ({fixable} with a fix released), by package:")
+            by_pkg = {}
+            for v in scan["vulns"]:
+                if v["severity"] == "HIGH":
+                    n, f = by_pkg.get(v["package"], (0, 0))
+                    by_pkg[v["package"]] = (n + 1, f + (1 if v["fixed"] else 0))
+            ranked = sorted(by_pkg.items(), key=lambda kv: (-kv[1][0], kv[0]))
+            for pkg, (n, f) in ranked[:25]:
+                fix = f", {f} fixable" if f else ""
+                lines.append(f"  - {pkg}: {n}{fix}")
+            if len(ranked) > 25:
+                lines.append(f"  - and {len(ranked) - 25} more packages")
         lines.append("")
     for target, error in errors:
         lines += [f"## `{target}` (scan failed)", "", f"```\n{error}\n```", ""]
