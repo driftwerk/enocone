@@ -3,7 +3,8 @@ area: Running flows
 tags: [conditions, tables, capture]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # A step or a table row can run only when a condition holds
@@ -38,12 +39,8 @@ flowchart LR
 - A condition that doesn't parse, or names a column the table doesn't
   have, is a `validate` error with the line.
 - A skipped step doesn't fail the flow. Later steps still run.
-
-## Open questions
-
-- Is `Only if:` the right wording? I recommend it over `when:` because the
-  flow's own sections are called "When", and a reviewer reads "Only if"
-  as plain English.
+- The line reads `Only if:`, not `when:`, because the flow's sections are
+  already called "When".
 
 ## Given
 

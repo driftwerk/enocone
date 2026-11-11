@@ -3,7 +3,8 @@ area: Hosted site
 tags: [hub, runs, delete]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # A project owner deletes a published run, and it is gone from the site at once
@@ -37,12 +38,7 @@ flowchart LR
   and when, on its Publishing page.
 - Members who aren't owners, reviewers and visitors to a public project can't
   delete runs, and the API refuses them.
-
-## Open questions
-
-- Should members (who can publish) also be able to delete runs they
-  published themselves? I recommend owners only for now: deleting is rare,
-  and it keeps the rule simple.
+- Only owners delete runs, including runs that members published.
 
 ## Given
 

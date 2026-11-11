@@ -3,7 +3,8 @@ area: CI
 tags: [github-action, ci]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # The GitHub Action reports the run's outcome clearly, without false alarms in its log

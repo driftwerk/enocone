@@ -3,7 +3,8 @@ area: Running flows
 tags: [secrets, capture, masking]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # A captured value marked secret is masked everywhere the run records it
@@ -48,12 +49,8 @@ flowchart LR
 - Masking only changes what is recorded. The flow still uses the real value.
 - Without either setting, captured values are recorded in full, exactly as
   today.
-
-## Open questions
-
-- Should the masked text show which capture it was (`••• invite_link •••`)
-  or only `•••`, as `{{secret.*}}` values do now? I recommend naming it:
-  someone debugging a failed run needs to know which value went where.
+- A masked value shows which capture it was: `•••invite_link•••`, so
+  someone debugging a failed run can tell which value went where.
 
 ## Given
 

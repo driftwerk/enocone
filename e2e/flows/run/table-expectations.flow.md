@@ -3,7 +3,8 @@ area: Running flows
 tags: [tables, examples, expect]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # A table row can set the expected status, so one table states an access matrix

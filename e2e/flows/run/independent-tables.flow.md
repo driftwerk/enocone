@@ -3,7 +3,8 @@ area: Running flows
 tags: [tables, examples]
 owner: enocone
 priority: high
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # Several tables in one step are separate lists of cases unless one links to another

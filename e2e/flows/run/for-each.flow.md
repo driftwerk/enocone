@@ -3,7 +3,8 @@ area: Running flows
 tags: [loops, capture, setup]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
 # A step can run once for each item of a list captured earlier
