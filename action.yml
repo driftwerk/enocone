@@ -20,6 +20,12 @@ inputs:
   browsers:
     description: Browsers to install (space separated), or `none` for HTTP-only suites
     default: chromium
+  upload:
+    description: When to upload the report as an artifact - `always`, `on-failure` or `never`
+    default: always
+  retention-days:
+    description: Days to keep the uploaded report (0 - the repository's default)
+    default: "0"
   publish:
     description: >-
       Send the run to the team site named under [hub] in enocone.toml. Needs
@@ -28,6 +34,18 @@ inputs:
     default: "false"
 
 outputs:
+  outcome:
+    description: passed, failed, invalid (flow document errors) or error (could not run)
+    value: ${{ steps.run.outputs.outcome }}
+  passed:
+    description: How many flows passed
+    value: ${{ steps.run.outputs.passed }}
+  failed:
+    description: How many flows failed
+    value: ${{ steps.run.outputs.failed }}
+  report-url:
+    description: The published run's link (when publish is true and it was published)
+    value: ${{ steps.publish.outputs.url }}
   exit-code:
     description: 0 ok, 1 failures, 2 flow document errors, 3 could not run
     value: ${{ steps.run.outputs.exit-code }}
@@ -48,7 +66,7 @@ runs:
       id: src
       shell: bash
       run: |
-        cd "${{ github.action_path }}"
+        cd "$GITHUB_ACTION_PATH"
         hash=$(find Cargo.toml Cargo.lock crates -type f -not -path '*/target/*' -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
         echo "hash=$hash" >> "$GITHUB_OUTPUT"
 
@@ -65,7 +83,7 @@ runs:
     - name: Build enocone
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      run: cargo install --locked --path "${{ github.action_path }}/crates/enocone-cli" --root ~/.cache/enocone-bin
+      run: cargo install --locked --path "$GITHUB_ACTION_PATH/crates/enocone-cli" --root ~/.cache/enocone-bin
 
     - name: Put enocone on PATH
       shell: bash
@@ -76,48 +94,34 @@ runs:
     - name: Install browsers
       if: inputs.browsers != 'none'
       shell: bash
-      run: enocone install-browsers ${{ inputs.browsers }} --with-deps
+      env:
+        INPUT_BROWSERS: ${{ inputs.browsers }}
+      # One argument per browser name, so the list is split on spaces.
+      run: enocone install-browsers $INPUT_BROWSERS --with-deps
 
     - name: Run flows
       id: run
       shell: bash
       working-directory: ${{ inputs.project }}
-      run: |
-        set +e
-        ENV_ARG=""
-        if [ -n "${{ inputs.env }}" ]; then ENV_ARG="--env ${{ inputs.env }}"; fi
-        enocone run $ENV_ARG --out enocone-report ${{ inputs.args }}
-        code=$?
-        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
-        echo "report=${{ inputs.project }}/enocone-report" >> "$GITHUB_OUTPUT"
-        exit $code
+      env:
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_ENV: ${{ inputs.env }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_UPLOAD: ${{ inputs.upload }}
+      run: bash "$GITHUB_ACTION_PATH/action/enocone-action.sh" run
 
     - name: Upload report
-      if: always()
+      if: always() && steps.run.outputs.upload == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.report-name }}
         path: ${{ inputs.project }}/enocone-report
         if-no-files-found: ignore
+        retention-days: ${{ inputs.retention-days }}
 
     - name: Publish to the team site
       id: publish
       if: always() && inputs.publish == 'true'
       shell: bash
       working-directory: ${{ inputs.project }}
-      run: |
-        if [ ! -f enocone-report/results.json ]; then
-          echo "::notice title=enocone::Nothing to publish: the run didn't produce results.json."
-          exit 0
-        fi
-        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -z "${ENOCONE_HUB_TOKEN:-}" ]; then
-          echo "::notice title=enocone::Not publishing: this job can't get an OIDC token. Add 'permissions: id-token: write' (pull requests from forks never get one)."
-          exit 0
-        fi
-        if url=$(enocone publish); then
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "::notice title=enocone::Published $url"
-          echo "Published to [$url]($url)" >> "$GITHUB_STEP_SUMMARY"
-        else
-          echo "::warning title=enocone::Publishing failed; the report is still in the uploaded artifact."
-        fi
+      run: bash "$GITHUB_ACTION_PATH/action/enocone-action.sh" publish

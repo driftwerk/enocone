@@ -209,6 +209,12 @@ The run writes `enocone-report/`: `index.html` (add `--single-file` to embed scr
 `results.json`, `junit.xml` and `summary.md`. It also appends to the GitHub step summary.
 Exit codes: `0` passed, `1` failures, `2` flow document errors, `3` could not run.
 
+The action's outputs are `outcome` (`passed`, `failed`, `invalid` or `error`),
+the `passed` and `failed` flow counts, `report-url` when the run was
+published, `exit-code` and `report`. `upload: on-failure` (or `never`)
+uploads the report only when something failed, and `retention-days` sets how
+long GitHub keeps it.
+
 A `Dockerfile` builds an image with Chromium for container-based CI.
 
 ## enocone tests itself

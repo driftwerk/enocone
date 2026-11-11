@@ -1,0 +1,6 @@
+# Used by enocone's own suite (e2e/flows/ci/action.flow.md) and by CI, which
+# runs the action on this project: a flow that fails.
+project = "action-fail"
+
+[run]
+allow_exec = true

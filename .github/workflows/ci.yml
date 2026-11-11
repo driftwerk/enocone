@@ -44,6 +44,31 @@ jobs:
         with:
           project: examples/demo
           report-name: demo-report
+      # The action's outputs, on a passing project and on a failing one.
+      - uses: ./
+        id: pass
+        with:
+          project: e2e/fixtures/action/pass
+          report-name: action-pass
+          browsers: none
+          upload: on-failure
+      - uses: ./
+        id: fail
+        continue-on-error: true
+        with:
+          project: e2e/fixtures/action/fail
+          report-name: action-fail
+          browsers: none
+          upload: on-failure
+          retention-days: 1
+      - name: Check the action's outputs
+        env:
+          PASS: ${{ steps.pass.outputs.outcome }} ${{ steps.pass.outputs.passed }} ${{ steps.pass.outputs.failed }}
+          FAIL: ${{ steps.fail.outputs.outcome }} ${{ steps.fail.outputs.passed }} ${{ steps.fail.outputs.failed }} ${{ steps.fail.outputs.exit-code }}
+        run: |
+          echo "pass: $PASS / fail: $FAIL"
+          test "$PASS" = "passed 1 0"
+          test "$FAIL" = "failed 0 1 1"
 
   # enocone's own specification: the flows in e2e/ run the freshly built binary.
   e2e:
