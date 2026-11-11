@@ -129,11 +129,19 @@ pub async fn run_email(http: &reqwest::Client, mailbox: &Mailbox, spec: &EmailSp
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
 
+    // A mailbox can list a message a moment before it serves its details:
+    // "not found" then means "not ready yet", until the step's time runs out.
     let (text, html) = match &found.inline {
         Some(b) => b.clone(),
-        None => match body(http, mailbox, &found.id).await {
-            Ok(b) => b,
-            Err(e) => return fail(record, format!("could not read message {}: {e}", found.id)),
+        None => loop {
+            match body(http, mailbox, &found.id).await {
+                Ok(b) => break b,
+                Err(e) if e.not_found() && started.elapsed() < within => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(e) if e.not_found() => {
+                    return fail(record, format!("message {} was listed but never readable within {}s: {e}", found.id, within.as_secs()));
+                }
+                Err(e) => return fail(record, format!("could not read message {}: {e}", found.id)),
+            }
         },
     };
     let text = if text.trim().is_empty() { strip_tags(&html) } else { text };
@@ -205,7 +213,46 @@ fn plural(n: usize) -> String {
     if n == 1 { "1 message".into() } else { format!("{n} messages") }
 }
 
-async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Result<Value, String> {
+/// A failed mailbox request: its HTTP status (when there was one) and why.
+#[derive(Debug)]
+struct MailError {
+    status: Option<u16>,
+    message: String,
+}
+
+impl MailError {
+    /// The mailbox doesn't have it (yet): 404, or Postmark's 422 with ErrorCode 701.
+    fn not_found(&self) -> bool {
+        match self.status {
+            Some(404) => true,
+            Some(422) => {
+                let body = self.message.split_once(": ").map(|(_, b)| b).unwrap_or("");
+                serde_json::from_str::<Value>(body).is_ok_and(|v| v["ErrorCode"] == 701) || body.replace(' ', "").contains("\"ErrorCode\":701")
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for MailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<String> for MailError {
+    fn from(message: String) -> Self {
+        MailError { status: None, message }
+    }
+}
+
+impl From<&str> for MailError {
+    fn from(message: &str) -> Self {
+        MailError { status: None, message: message.into() }
+    }
+}
+
+async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Result<Value, MailError> {
     let mut req = http.get(url).header("Accept", "application/json");
     match (mailbox.provider, &mailbox.token) {
         (Provider::Postmark, Some(t)) => req = req.header("X-Postmark-Server-Token", t),
@@ -222,9 +269,9 @@ async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Resul
     let status = resp.status();
     let text = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("HTTP {status}: {}", shorten(&text, 300)));
+        return Err(MailError { status: Some(status.as_u16()), message: format!("HTTP {status}: {}", shorten(&text, 300)) });
     }
-    serde_json::from_str(&text).map_err(|e| format!("not JSON: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("not JSON: {e}").into())
 }
 
 fn base(mailbox: &Mailbox) -> &str {
@@ -240,7 +287,7 @@ fn enc(s: &str) -> String {
         .collect()
 }
 
-async fn list(http: &reqwest::Client, mailbox: &Mailbox, to: &str) -> Result<Vec<Summary>, String> {
+async fn list(http: &reqwest::Client, mailbox: &Mailbox, to: &str) -> Result<Vec<Summary>, MailError> {
     let s = |v: &Value| v.as_str().unwrap_or("").to_string();
     let time = parse_time;
     match mailbox.provider {
@@ -277,7 +324,7 @@ async fn list(http: &reqwest::Client, mailbox: &Mailbox, to: &str) -> Result<Vec
 }
 
 /// (text, html) of one message.
-async fn body(http: &reqwest::Client, mailbox: &Mailbox, id: &str) -> Result<(String, String), String> {
+async fn body(http: &reqwest::Client, mailbox: &Mailbox, id: &str) -> Result<(String, String), MailError> {
     let s = |v: &Value| v.as_str().unwrap_or("").to_string();
     match mailbox.provider {
         Provider::Postmark => {
@@ -427,5 +474,68 @@ mod tests {
         // Single part: MIME is null.
         let single: Value = serde_json::from_str(r#"{ "Content": { "Headers": { "Content-Type": ["text/plain"] }, "Body": "Hi https://x.test/a" }, "MIME": null }"#).unwrap();
         assert_eq!(mailhog_body(&single).0, "Hi https://x.test/a");
+    }
+
+    /// A Postmark stand-in that lists one message, whose details answer
+    /// `detail_status` for the first `misses` reads (and every read when
+    /// `misses` is `usize::MAX`), then the message.
+    async fn mailbox(misses: usize, detail_status: u16) -> (Mailbox, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reads = std::sync::Arc::new(AtomicUsize::new(0));
+        let r2 = reads.clone();
+        let app = Router::new()
+            .route(
+                "/messages/outbound",
+                get(|| async { Json(serde_json::json!({ "Messages": [{ "MessageID": "m1", "Subject": "Welcome", "From": "a@x.test", "ReceivedAt": Utc::now().to_rfc3339() }] })) }),
+            )
+            .route(
+                "/messages/outbound/{id}/details",
+                get(move || {
+                    let n = r2.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if n < misses {
+                            let code = if detail_status == 422 { 701 } else { 0 };
+                            (StatusCode::from_u16(detail_status).unwrap(), Json(serde_json::json!({ "ErrorCode": code, "Message": "This message was not found." }))).into_response()
+                        } else {
+                            Json(serde_json::json!({ "TextBody": "Hello", "HtmlBody": "" })).into_response()
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (Mailbox { provider: Provider::Postmark, url: format!("http://{addr}"), token: Some("t".into()) }, reads)
+    }
+
+    fn spec(within_ms: u64) -> EmailSpec {
+        EmailSpec { to: "jane@x.test".into(), subject: None, within: Some(Duration::from_millis(within_ms)), expect: Default::default(), capture: vec![] }
+    }
+
+    #[tokio::test]
+    async fn a_listed_message_is_read_once_its_details_are_ready() {
+        let (mb, reads) = mailbox(2, 422).await;
+        let out = run_email(&reqwest::Client::new(), &mb, &spec(5000), Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.record.text, "Hello");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_message_that_never_becomes_readable_fails_when_time_runs_out() {
+        let (mb, _) = mailbox(usize::MAX, 422).await;
+        let out = run_email(&reqwest::Client::new(), &mb, &spec(1200), Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
+        let e = out.error.expect("fails").message;
+        assert!(e.contains("message m1 was listed but never readable within 1s"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn other_errors_fail_at_once() {
+        let (mb, reads) = mailbox(usize::MAX, 500).await;
+        let out = run_email(&reqwest::Client::new(), &mb, &spec(5000), Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
+        let e = out.error.expect("fails").message;
+        assert!(e.contains("could not read message m1: HTTP 500"), "{e}");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
