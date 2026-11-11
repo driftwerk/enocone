@@ -150,6 +150,10 @@ Tables that don't link to each other are separate lists of cases: the step
 runs for every row of each. Expected values can come from the row as well (`status: "{{row.status}}"`),
 so one table can state who gets 200, 403 or 404.
 
+A step can also repeat over a list captured earlier: a line
+`For each: {{old_ids}}` runs its blocks once per item, as `{{item}}`, so a
+setup flow can delete every old resource before creating a fresh one.
+
 ## The team site
 
 `enocone serve` (or enoc.one) shares flows, runs and review comments with the

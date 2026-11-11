@@ -3,7 +3,7 @@ area: Running flows
 tags: [loops, capture, setup]
 owner: enocone
 priority: normal
-stage: approved
+stage: implemented
 approved_by: Kingsley Hendrickse (2026-11-11)
 ---
 
@@ -30,8 +30,10 @@ flowchart LR
   blocks run once per item, with the item as `{{item}}`. When items are
   objects, their fields are `{{item.name}}` and so on.
 - The list comes from an earlier capture. A capture whose path can match
-  several nodes (`$.results[?@.name == 'demo'].id`) always captures a list,
-  even when it matches one item or none.
+  several nodes (`$.results[?@.name == 'demo'].id`) captures a list when it
+  matches several, and an empty list when it matches none. When it matches
+  one, the capture is that one value (as it always has been, so existing
+  flows keep working), and `For each:` treats it as a list of one.
 - Each item is reported like a table row, labelled with the item (or its
   `id` or `name` field), and passes or fails on its own. The step passes
   when every item does.
@@ -44,15 +46,71 @@ flowchart LR
 ## Given
 
 1. **The demo app has three resources named "demo" and one named "keep"**
+   ```exec
+   # Copy the setup project: its flows create resources in the demo app first
+   run: |
+     cp -R "{{env.FIXTURES}}/for-each" "{{run.tmp}}/p"
+     grep -c 'name: demo' "{{run.tmp}}/p/flows/setup/tidy.flow.md"
+   expect: { stdout: "3" }
+   ```
 
 ## When
 
 2. **A flow captures the ids of the "demo" resources, and a step deletes each id**
+   ```exec
+   # Run the setup flows and read the results
+   run: |
+     "{{env.ENOCONE_BIN}}" --project "{{run.tmp}}/p" run --out "{{run.tmp}}/out" >/dev/null 2>&1
+     cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       $.summary.passed: 2
+       $.summary.failed: 1
+   ```
 
 ## Then
 
 3. **Three deletes run, each reported as its own row, and only "keep" remains**
+   ```exec
+   # Check the deletes, item by item, and what was left
+   run: cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[2].status": passed
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[2].rows": { len: 3 }
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[2].rows[0].label": { matches: "^res_" }
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[2].rows[0].result.records[0].method": DELETE
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[2].rows[2].result.records[0].status": 204
+       "$.flows[?(@.flow.id=='setup.tidy')].attempts[0].steps[3].status": passed
+   ```
+   ```browser
+   # The report lists each item with its result
+   - goto: "file://{{run.tmp}}/out/index.html#flow=setup.tidy"
+   - expect: { text: "For each:" }
+   - expect: { role: columnheader, name: Item }
+   - expect: { text: "res_" }
+   - screenshot
+   ```
 
 4. **When nothing matches, the delete step is skipped and says the list was empty**
+   ```exec
+   # Check the delete step was skipped, and the step after it still ran
+   run: cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       "$.flows[?(@.flow.id=='setup.nothing')].attempts[0].steps[2].status": skipped
+       "$.flows[?(@.flow.id=='setup.nothing')].attempts[0].steps[2].note": { matches: "^skipped: `\\{\\{old_ids\\}\\}` is an empty list, so there was nothing to do$" }
+       "$.flows[?(@.flow.id=='setup.nothing')].attempts[0].steps[3].status": passed
+   ```
 
 5. **With more items than the limit, the step fails before deleting anything**
+   ```exec
+   # Check the step failed without running any item, and all four are still there
+   run: cat "{{run.tmp}}/out/results.json"
+   expect:
+     json:
+       "$.flows[?(@.flow.id=='setup.limit')].attempts[0].steps[2].status": failed
+       "$.flows[?(@.flow.id=='setup.limit')].attempts[0].steps[2].error.message": { matches: "has 3 items, more than the 2 this step runs at most, so none were run\\. If that many is expected, write `\\(at most 3\\)` after the list$" }
+       "$.flows[?(@.flow.id=='setup.limit')].attempts[0].steps[2].rows": { exists: false }
+       "$.flows[?(@.flow.id=='setup.limit')].attempts[0].steps[3].status": passed
+   ```

@@ -10,7 +10,6 @@ use enocone_spec::results::{Check, ExecRecord, StepError};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
-use crate::http::json_at;
 use crate::vars::Masker;
 
 const OUTPUT_LIMIT: usize = 32 * 1024;
@@ -135,7 +134,7 @@ pub async fn run_exec(spec: &ExecSpec, root: &Path, masker: &Masker, default_tim
         for (name, c) in &spec.capture {
             let v = match c {
                 ExecCapture::Exit => code.map(Value::from),
-                ExecCapture::Json(p) => parsed.as_ref().and_then(|j| json_at(j, p)),
+                ExecCapture::Json(p) => parsed.as_ref().and_then(|j| crate::http::capture_at(j, p)),
                 ExecCapture::Regex(r) => regex::Regex::new(r).ok().and_then(|re| re.captures(&stdout)).and_then(|c| c.get(1).or_else(|| c.get(0))).map(|m| Value::String(m.as_str().to_string())),
             };
             match v {

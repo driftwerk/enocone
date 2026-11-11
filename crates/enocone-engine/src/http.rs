@@ -145,6 +145,12 @@ pub fn is_multi(path: &str) -> bool {
     false
 }
 
+/// What a capture takes from a JSONPath: as [`json_at`], except that a path
+/// that can match several nodes and matches none captures an empty list.
+pub fn capture_at(root: &Value, path: &str) -> Option<Value> {
+    json_at(root, path).or_else(|| (is_multi(path) && serde_json_path::JsonPath::parse(path).is_ok()).then(|| Value::Array(vec![])))
+}
+
 /// Values at a JSONPath: one node → that value; many → an array; none → None.
 pub fn json_at(root: &Value, path: &str) -> Option<Value> {
     let p = serde_json_path::JsonPath::parse(path).ok()?;
@@ -204,7 +210,7 @@ fn capture(spec: &HttpSpec, r: &Response) -> Result<Vec<(String, Value)>, StepEr
     let mut out = Vec::new();
     for (name, c) in &spec.capture {
         let v = match c {
-            HttpCapture::Json(path) => r.json.as_ref().and_then(|j| json_at(j, path)),
+            HttpCapture::Json(path) => r.json.as_ref().and_then(|j| capture_at(j, path)),
             HttpCapture::Header(h) => r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(h)).map(|(_, v)| Value::String(v.clone())),
             HttpCapture::Regex(re) => {
                 regex::Regex::new(re).ok().and_then(|re| re.captures(&r.text).map(|c| Value::String(c.get(1).or_else(|| c.get(0)).map(|m| m.as_str().to_string()).unwrap_or_default())))
@@ -331,6 +337,9 @@ mod len_tests {
         assert_eq!(len("$[*]", 3), Ok(()));
         // A single-match filter's fields are still reachable as values.
         assert_eq!(json_at(&body, "$[?@.name == 'a'].x"), Some(json!(1)));
+        assert_eq!(capture_at(&body, "$[?@.name == 'zzz'].x"), Some(json!([])));
+        assert_eq!(capture_at(&body, "$[?@.name == 'a'].x"), Some(json!(1)));
+        assert_eq!(capture_at(&json!({"a": 1}), "$.b"), None);
         // A singular path keeps measuring the value itself.
         assert_eq!(len("$[0]", 3), Ok(()));
         // A filter in the middle, ending on one field: measures that field.

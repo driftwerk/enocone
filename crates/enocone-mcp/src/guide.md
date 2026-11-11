@@ -335,6 +335,23 @@ its own.
 - `validate` rejects a `{{row.x}}` the table doesn't have, and a linked row
   whose id isn't in the first table. Tables outside steps are only text.
 
+## Repeating a step over a captured list
+
+A line `For each: {{old_ids}}` under a step's heading runs its blocks once
+per item, as `{{item}}` (or `{{item.name}}` for objects). Use it to tidy up
+in a setup flow rather than a shell loop with curl:
+
+```http
+GET: "{{env.API}}/resources"
+capture: { old_ids: "$.results[?@.name == 'demo'].id" }
+```
+
+then, in the next step, `For each: {{old_ids}}` and a `DELETE:` on
+`{{item}}`. Each item is reported like a table row. An empty list skips the
+step. A filter capture that matches nothing captures `[]`. A step runs at
+most 100 items, unless it says `(at most 500)` after the list. With more,
+it fails before running any. A step can't have both `For each:` and a table.
+
 ## Variables
 
 `{{env.X}}` (enocone.toml env), `{{secret.X}}` (environment variable, masked

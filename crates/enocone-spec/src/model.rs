@@ -173,9 +173,24 @@ pub struct Step {
     /// column named after another table) adds its rows to that table's rows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<Table>,
+    /// A `For each: {{list}}` line: the blocks run once per item of the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_each: Option<ForEach>,
     /// 1-based line of the step in the source.
     pub line: usize,
 }
+
+/// A step's `For each: {{old_ids}} (at most 500)` line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForEach {
+    /// The variable holding the list, e.g. `old_ids`.
+    pub list: String,
+    /// The most items the step runs; with more, it fails before running any.
+    pub max: usize,
+}
+
+/// How many items a `For each:` step runs unless it says `(at most N)`.
+pub const FOR_EACH_MAX: usize = 100;
 
 /// A Markdown table of examples in a step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

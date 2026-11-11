@@ -347,24 +347,70 @@ impl Engine {
     /// Run a step: once, or once per row of its table of examples.
     fn exec_step<'a>(&'a self, st: &'a mut FlowState, step: &'a Step, prefix: &'a str) -> StepFuture<'a> {
         Box::pin(async move {
-            if step.tables.is_empty() {
-                return self.exec_step_once(st, step, prefix).await;
-            }
             let started = Instant::now();
-            let several = step.drivers().len() > 1;
-            // Each row starts from the values captured before the table; nothing carries between rows.
+            // The cases the step runs for: each row of its tables, or each item of its list.
+            struct Case {
+                var: &'static str,
+                value: Value,
+                row: usize,
+                table: usize,
+                table_name: Option<String>,
+                label: String,
+                line: usize,
+                prefix: String,
+            }
+            let mut cases = Vec::new();
+            if let Some(fe) = &step.for_each {
+                let items = match st.vars.lookup(&fe.list) {
+                    None => return step_note(step, Status::Failed, started, Some(format!("`{{{{{}}}}}` isn't set: capture it in an earlier step", fe.list))),
+                    Some(Value::Array(a)) => a,
+                    Some(Value::Null) => vec![],
+                    Some(v) => vec![v],
+                };
+                if items.is_empty() {
+                    let why = format!("skipped: `{{{{{}}}}}` is an empty list, so there was nothing to do", fe.list);
+                    return StepResult { note: Some(why), ..step_note(step, Status::Skipped, started, None) };
+                }
+                if items.len() > fe.max {
+                    let msg = format!(
+                        "`{{{{{}}}}}` has {} items, more than the {} this step runs at most, so none were run. If that many is expected, write `(at most {})` after the list",
+                        fe.list,
+                        items.len(),
+                        fe.max,
+                        items.len()
+                    );
+                    return step_note(step, Status::Failed, started, Some(msg));
+                }
+                for (i, v) in items.into_iter().enumerate() {
+                    let label = item_label(&v);
+                    cases.push(Case { var: "item", value: v, row: i + 1, table: 0, table_name: None, label, line: step.line, prefix: format!("{prefix}item{}-", i + 1) });
+                }
+            } else if step.tables.is_empty() {
+                return self.exec_step_once(st, step, prefix).await;
+            } else {
+                let several = step.drivers().len() > 1;
+                for (t, i) in step.row_refs() {
+                    let Some(value) = step.row_value_in(t, i) else { continue };
+                    cases.push(Case {
+                        var: "row",
+                        value,
+                        row: i + 1,
+                        table: t,
+                        table_name: several.then(|| step.table_name(t)),
+                        label: step.row_label_in(t, i),
+                        line: step.tables[t].rows[i].line,
+                        prefix: if t == 0 { format!("{prefix}row{}-", i + 1) } else { format!("{prefix}t{}row{}-", t + 1, i + 1) },
+                    });
+                }
+            }
+            // Each case starts from the values captured before the step; nothing carries between them.
             let before = st.vars.captured.clone();
             let mut rows = Vec::new();
-            for (t, i) in step.row_refs() {
+            for c in cases {
                 st.vars.captured = before.clone();
-                if let Some(v) = step.row_value_in(t, i) {
-                    st.vars.set("row", v);
-                }
-                let row_prefix = if t == 0 { format!("{prefix}row{}-", i + 1) } else { format!("{prefix}t{}row{}-", t + 1, i + 1) };
-                let result = self.exec_step_once(st, step, &row_prefix).await;
-                let line = step.tables[t].rows[i].line;
-                let table_name = several.then(|| step.table_name(t));
-                rows.push(RowResult { row: i + 1, table: t, table_name, label: step.row_label_in(t, i), line, result });
+                st.vars.set(c.var, c.value);
+                let result = self.exec_step_once(st, step, &c.prefix).await;
+                rows.push(RowResult { row: c.row, table: c.table, table_name: c.table_name, label: c.label, line: c.line, result });
             }
             st.vars.captured = before;
             let failed: Vec<&RowResult> = rows.iter().filter(|r| r.result.status == Status::Failed).collect();
@@ -377,9 +423,10 @@ impl Engine {
             };
             let error = failed.first().map(|f| {
                 let e = f.result.error.clone().unwrap_or(StepError { message: "failed".into(), expected: None, actual: None });
-                let more = if failed.len() > 1 { format!(" ({} of {} rows failed)", failed.len(), rows.len()) } else { String::new() };
+                let what = if step.for_each.is_some() { "item" } else { "row" };
+                let more = if failed.len() > 1 { format!(" ({} of {} {what}s failed)", failed.len(), rows.len()) } else { String::new() };
                 let of = f.table_name.as_ref().map(|n| format!(" of {n}")).unwrap_or_default();
-                StepError { message: format!("row {}{of} ({}): {}{more}", f.row, f.label, e.message), expected: e.expected, actual: e.actual }
+                StepError { message: format!("{what} {}{of} ({}): {}{more}", f.row, f.label, e.message), expected: e.expected, actual: e.actual }
             });
             StepResult {
                 key: step.key.clone(),
@@ -782,4 +829,36 @@ fn note_only(step: &Step, status: Status, why: &str) -> StepResult {
 
 fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' }).collect()
+}
+
+/// A step result that ran nothing: an error, or a skip.
+fn step_note(step: &Step, status: Status, started: Instant, error: Option<String>) -> StepResult {
+    StepResult {
+        key: step.key.clone(),
+        status,
+        duration_ms: started.elapsed().as_millis() as u64,
+        error: error.map(|message| StepError { message, expected: None, actual: None }),
+        note: None,
+        records: vec![],
+        captured: vec![],
+        screenshot: None,
+        snapshot: None,
+        page_url: None,
+        console: vec![],
+        children: vec![],
+        rows: vec![],
+    }
+}
+
+/// How an item of a `For each:` list is named in results: itself, or its `id` or `name`.
+fn item_label(v: &Value) -> String {
+    let v = match v {
+        Value::Object(o) => o.get("id").or_else(|| o.get("name")).unwrap_or(v),
+        _ => v,
+    };
+    let s = match v {
+        Value::String(s) => s.clone(),
+        other => value_preview(other),
+    };
+    if s.chars().count() > 60 { format!("{}…", s.chars().take(59).collect::<String>()) } else { s }
 }

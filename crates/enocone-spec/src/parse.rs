@@ -375,7 +375,20 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
             Some(number)
         };
         let tables = check_tables(p.tables, &p.blocks, diags);
-        let step = Step { key, number: num, intent, notes: p.notes.trim().to_string(), blocks: p.blocks, designs: p.designs, tables, line: p.line };
+        let (notes, for_each) = take_for_each(&p.notes, p.line, diags);
+        if for_each.is_some() && !tables.is_empty() {
+            diags.push(Diagnostic { line: p.line, severity: Severity::Error, message: "a step can't have both `For each:` and a table: use one or the other".into() });
+        }
+        for b in &p.blocks {
+            if for_each.is_none() && crate::template::variables(&b.value).iter().any(|v| v == "item" || v.starts_with("item.")) {
+                diags.push(Diagnostic {
+                    line: b.line,
+                    severity: Severity::Error,
+                    message: "`{{item}}` is the current item of a `For each:` step, but this step has no `For each: {{list}}` line".into(),
+                });
+            }
+        }
+        let step = Step { key, number: num, intent, notes, blocks: p.blocks, designs: p.designs, tables, for_each, line: p.line };
         match sections.last_mut() {
             Some(s) if s.kind == kind => s.steps.push(step),
             _ => sections.push(Section { kind, steps: vec![step] }),
@@ -712,6 +725,28 @@ fn plural(n: usize, word: &str) -> String {
 
 /// Check a step's tables against each other and against the `{{row.…}}` its
 /// blocks use, and work out how linked tables point at the first one.
+/// Take a `For each: {{list}} (at most N)` line out of a step's notes.
+fn take_for_each(notes: &str, line: usize, diags: &mut Vec<Diagnostic>) -> (String, Option<crate::model::ForEach>) {
+    let notes = notes.trim();
+    let Some(at) = notes.find("For each:") else { return (notes.to_string(), None) };
+    let re = regex::Regex::new(r"^For each:\s*\{\{\s*([A-Za-z_][\w.]*)\s*\}\}(?:\s*\(at most (\d+)\))?").unwrap();
+    let rest = &notes[at..];
+    let Some(c) = re.captures(rest) else {
+        diags.push(Diagnostic { line, severity: Severity::Error, message: "write the list as `For each: {{name}}`, optionally followed by `(at most 500)`".into() });
+        return (notes.to_string(), None);
+    };
+    let max = match c.get(2).map(|m| m.as_str().parse::<usize>()) {
+        None => crate::model::FOR_EACH_MAX,
+        Some(Ok(n)) if n > 0 => n,
+        _ => {
+            diags.push(Diagnostic { line, severity: Severity::Error, message: "`(at most N)` needs a number above 0".into() });
+            crate::model::FOR_EACH_MAX
+        }
+    };
+    let left = format!("{} {}", &notes[..at], &rest[c.get(0).unwrap().end()..]);
+    (left.trim().to_string(), Some(crate::model::ForEach { list: c[1].to_string(), max }))
+}
+
 #[allow(clippy::needless_range_loop)]
 fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Diagnostic>) -> Vec<Table> {
     let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
@@ -805,6 +840,23 @@ fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Dia
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn for_each_lines() {
+        let doc = |extra: &str| format!("---\nstage: implemented\n---\n# T\n\nWhy.\n\n## When\n\n1. **Delete each**\n\n   {extra}\n\n   ```http\n   DELETE: \"http://x/{{{{item}}}}\"\n   ```\n");
+        let p = parse_flow("f.flow.md", &doc("For each: {{old_ids}} (at most 500)"));
+        let step = &p.flow.sections[0].steps[0];
+        assert_eq!(step.for_each, Some(crate::model::ForEach { list: "old_ids".into(), max: 500 }));
+        assert_eq!(step.notes, "");
+        let p = parse_flow("f.flow.md", &doc("For each: {{old_ids}}"));
+        assert_eq!(p.flow.sections[0].steps[0].for_each.as_ref().unwrap().max, crate::model::FOR_EACH_MAX);
+        let p = parse_flow("f.flow.md", &doc("Some notes."));
+        assert!(p.diagnostics.iter().any(|d| d.message.contains("has no `For each:")), "{:?}", p.diagnostics);
+        let p = parse_flow("f.flow.md", &doc("For each: old_ids"));
+        assert!(p.diagnostics.iter().any(|d| d.message.contains("write the list as")), "{:?}", p.diagnostics);
+        let p = parse_flow("f.flow.md", &doc("For each: {{old_ids}}\n\n   | a |\n   |---|\n   | 1 |"));
+        assert!(p.diagnostics.iter().any(|d| d.message.contains("both `For each:` and a table")), "{:?}", p.diagnostics);
+    }
 
     #[test]
     fn quotes_unquoted_templates() {

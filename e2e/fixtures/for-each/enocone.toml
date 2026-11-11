@@ -1,0 +1,7 @@
+# Used by enocone's own suite (e2e/flows/run/for-each.flow.md): steps that
+# repeat over a captured list, against the fixture app's /api/resources.
+project = "for-each-fixture"
+default_env = "local"
+
+[env.local]
+API = "http://127.0.0.1:4010/api"

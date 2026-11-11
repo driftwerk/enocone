@@ -732,6 +732,7 @@
   // A step's tables of examples: each driving table with its rows' results, and any linked tables.
   function stepTables(s, r) {
     const tables = s.tables || [];
+    if (!tables.length && s.for_each && r && (r.rows || []).length) return forEachItems(s, r);
     if (!tables.length) return null;
     const rowRes = new Map(((r && r.rows) || []).map((x) => [`${x.table || 0}:${x.row}`, x]));
     // Checks describe the expected value as `= "15%"`; compare the value itself.
@@ -770,6 +771,24 @@
         h("table", null, h("thead", null, h("tr", null, head, ran ? h("th", null, "Result") : null)), h("tbody", null, body)));
     };
     return h("div", { class: "xtables" }, tables.map(one));
+  }
+
+  // A `For each:` step's items, one row each, like a table of examples.
+  function forEachItems(s, r) {
+    const body = r.rows.map((rr) => {
+      const st = rr.result.status;
+      const err = rr.result.error;
+      const tr = h("tr", { class: `r-${st} clickable`, title: "Show what this item sent and got back" }, h("td", null, rr.label),
+        h("td", { class: "res" }, st === "passed" ? [svg(ICON.check, 12), " passed"] : st === "failed" ? [svg(ICON.x, 12), " failed"] : statusLabel(st)));
+      const more = h("tr", { class: "rdetail", style: "display:none" }, h("td", { colspan: "2" },
+        err ? h("div", { class: "err" }, err.message) : null,
+        (rr.result.records || []).length ? h("pre", { class: "term" }, happened(rr.result)) : null));
+      tr.onclick = () => { more.style.display = more.style.display === "none" ? "" : "none"; };
+      return [tr, more];
+    });
+    return h("div", { class: "xtables" }, h("div", { class: "xtable" },
+      h("div", { class: "small tname" }, `For each: {{${s.for_each.list}}}`),
+      h("table", null, h("thead", null, h("tr", null, h("th", null, "Item"), h("th", null, "Result"))), h("tbody", null, body))));
   }
 
   function zoom(src) {
