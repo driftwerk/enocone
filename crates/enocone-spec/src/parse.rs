@@ -712,6 +712,7 @@ fn plural(n: usize, word: &str) -> String {
 
 /// Check a step's tables against each other and against the `{{row.…}}` its
 /// blocks use, and work out how linked tables point at the first one.
+#[allow(clippy::needless_range_loop)]
 fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Diagnostic>) -> Vec<Table> {
     let err = |diags: &mut Vec<Diagnostic>, line: usize, message: String| diags.push(Diagnostic { line, severity: Severity::Error, message });
     for t in &tables {
