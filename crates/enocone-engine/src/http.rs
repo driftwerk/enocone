@@ -69,6 +69,43 @@ async fn send(client: &reqwest::Client, spec: &HttpSpec, auth: &[(String, String
     Ok(Response { status, headers, text, json })
 }
 
+/// What a check sees at a JSONPath. A `len` check on a path that can match
+/// several nodes counts the matches, however many there are; everything else
+/// sees [`json_at`].
+pub fn json_for(root: &Value, path: &str, m: &enocone_spec::blocks::Matcher) -> Option<Value> {
+    if m.counts() && is_multi(path) {
+        let p = serde_json_path::JsonPath::parse(path).ok()?;
+        return Some(Value::Array(p.query(root).all().into_iter().cloned().collect()));
+    }
+    json_at(root, path)
+}
+
+/// Whether a JSONPath can match more than one node: it has a filter, a
+/// wildcard, a slice, a union or a descendant (`..`) segment.
+pub fn is_multi(path: &str) -> bool {
+    let (mut quote, mut depth, mut prev) = (None::<char>, 0usize, '\0');
+    for c in path.chars() {
+        match quote {
+            Some(q) => {
+                if c == q && prev != '\\' {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '[' => depth += 1,
+                ']' => depth = depth.saturating_sub(1),
+                '*' => return true,
+                '.' if prev == '.' && depth == 0 => return true,
+                '?' | ':' | ',' if depth > 0 => return true,
+                _ => {}
+            },
+        }
+        prev = c;
+    }
+    false
+}
+
 /// Values at a JSONPath: one node → that value; many → an array; none → None.
 pub fn json_at(root: &Value, path: &str) -> Option<Value> {
     let p = serde_json_path::JsonPath::parse(path).ok()?;
@@ -100,7 +137,7 @@ fn check(spec: &HttpSpec, r: &Response) -> (Vec<Check>, Option<StepError>) {
         return (checks, first_err);
     }
     for (path, m) in &spec.expect.json {
-        let actual = r.json.as_ref().and_then(|j| json_at(j, path));
+        let actual = r.json.as_ref().and_then(|j| json_for(j, path, m));
         match (&r.json, m.check(actual.as_ref())) {
             (None, _) => fail(&mut checks, path.clone(), m.describe(), "not JSON".into(), "response is not JSON".into()),
             (_, Ok(())) => checks.push(Check { what: format!("{path} {}", m.describe()), ok: true, detail: None }),
@@ -237,4 +274,35 @@ pub async fn run_http(client: &reqwest::Client, spec: &HttpSpec, auth: &[(String
 /// Used by `eventually` text for matchers in reports.
 pub fn describe_matcher(m: &Matcher) -> String {
     m.describe()
+}
+
+#[cfg(test)]
+mod len_tests {
+    use super::*;
+    use enocone_spec::blocks::Matcher;
+    use serde_json::json;
+
+    #[test]
+    fn len_of_a_filter_counts_matches_whatever_the_count() {
+        let body = json!([{ "name": "a", "x": 1, "y": 2 }, { "name": "b", "x": 3 }, { "name": "b", "x": 4 }]);
+        let len = |path: &str, n| Matcher::Len(n).check(json_for(&body, path, &Matcher::Len(n)).as_ref());
+        assert_eq!(len("$[?@.name == 'z']", 0), Ok(()));
+        assert_eq!(len("$[?@.name == 'a']", 1), Ok(()));
+        assert_eq!(len("$[?@.name == 'b']", 2), Ok(()));
+        assert_eq!(len("$[*]", 3), Ok(()));
+        // A single-match filter's fields are still reachable as values.
+        assert_eq!(json_at(&body, "$[?@.name == 'a'].x"), Some(json!(1)));
+        // A singular path keeps measuring the value itself.
+        assert_eq!(len("$[0]", 3), Ok(()));
+    }
+
+    #[test]
+    fn multi_paths_are_recognised() {
+        for p in ["$[?@.a == 1]", "$.items[*]", "$..id", "$[0:2]", "$['a','b']", "$.*"] {
+            assert!(is_multi(p), "{p}");
+        }
+        for p in ["$.a.b", "$[0]", "$['a.b']", "$['x?y']", "$.items[3].id"] {
+            assert!(!is_multi(p), "{p}");
+        }
+    }
 }

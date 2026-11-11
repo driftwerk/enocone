@@ -125,7 +125,7 @@ pub async fn run_exec(spec: &ExecSpec, root: &Path, masker: &Masker, default_tim
     for (path, m) in &spec.expect.json {
         let r = match &parsed {
             None => Err("stdout is not JSON".to_string()),
-            Some(j) => m.check(json_at(j, path).as_ref()),
+            Some(j) => m.check(crate::http::json_for(j, path, m).as_ref()),
         };
         check(&mut record, format!("{path} {}", m.describe()), r);
     }

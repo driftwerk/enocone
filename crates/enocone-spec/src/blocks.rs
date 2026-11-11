@@ -106,6 +106,19 @@ pub enum Matcher {
     All(Vec<Matcher>),
 }
 
+impl Matcher {
+    /// Whether this checks a length, which for a path that can match several
+    /// nodes means how many matched (RFC 9535: such a path yields a node list).
+    pub fn counts(&self) -> bool {
+        match self {
+            Matcher::Len(_) => true,
+            Matcher::Not(m) => m.counts(),
+            Matcher::All(ms) => ms.iter().any(Matcher::counts),
+            _ => false,
+        }
+    }
+}
+
 const MATCHER_OPS: &[&str] = &["exists", "contains", "matches", "gt", "gte", "lt", "lte", "len", "one_of", "not", "eq"];
 
 impl Matcher {
