@@ -241,6 +241,9 @@ pub async fn api_delete_run(State(app): State<App>, h: HeaderMap, Path((slug, ru
             Ok(c) => c,
             Err(why) => return Ok(api_error(StatusCode::UNAUTHORIZED, &format!("GitHub's token wasn't accepted: {why}"))),
         };
+        if claims.event_name == "pull_request_target" {
+            return Ok(api_error(StatusCode::FORBIDDEN, "Workflows triggered by pull_request_target can't delete runs: they may be running a fork's code."));
+        }
         let repo = claims.repository.to_lowercase();
         let Some(project) = app.db.with(|c| db::project_by_slug(c, &slug))?.filter(|p| p.repo.as_deref() == Some(repo.as_str())) else {
             return Ok(api_error(StatusCode::FORBIDDEN, &format!("A workflow in {repo} can't delete runs of {slug}: the project isn't linked to that repository.")));

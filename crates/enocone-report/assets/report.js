@@ -716,6 +716,8 @@
       h("span", { class: `mark ${markCls}`, "aria-label": isPending ? "Pending" : statusLabel(status), title: isPending ? "Pending" : statusLabel(status) }, markIcon),
       h("div", { class: "sbody" },
         h("div", { class: "shead" }, h("span", { class: "intent" }, s.number ? h("span", { class: "n" }, `${s.number}.`) : null, s.intent), r && r.duration_ms ? h("span", { class: "small" }, fmtMs(r.duration_ms)) : null),
+        s.only_if ? h("div", { class: "small cond" }, h("b", null, "Only if: "), s.only_if) : null,
+        s.for_each ? h("div", { class: "small cond" }, h("b", null, "For each: "), `{{${s.for_each.list}}}`, s.for_each.max !== 100 ? ` (at most ${s.for_each.max})` : "") : null,
         s.notes ? h("div", { class: "note" }, s.notes) : null,
         stepTables(s, r),
         stepDesigns(s, r),

@@ -74,6 +74,19 @@ fn step_hash(flow: &Flow, anchor: &str) -> Option<String> {
     Some(Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// A step's `Only if:` and `For each:` lines, for the review page.
+fn step_conditions(s: &enocone_spec::Step) -> String {
+    let mut out = String::new();
+    if let Some(c) = &s.only_if {
+        out.push_str(&format!(r#"<div class="small muted"><b>Only if:</b> <code>{}</code></div>"#, esc(c)));
+    }
+    if let Some(fe) = &s.for_each {
+        let max = if fe.max == enocone_spec::FOR_EACH_MAX { String::new() } else { format!(" (at most {})", fe.max) };
+        out.push_str(&format!(r#"<div class="small muted"><b>For each:</b> <code>{{{{{}}}}}</code>{max}</div>"#, esc(&fe.list)));
+    }
+    out
+}
+
 /// A step's tables, for the review page.
 fn tables_html(step: &enocone_spec::Step, open_on_row: impl Fn(&str) -> usize) -> String {
     let mut out = String::new();
@@ -238,9 +251,10 @@ pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, 
             let row_count = |label: &str| top.iter().filter(|c| !c.resolved && c.step.as_deref().map(split_anchor) == Some((s.key.as_str(), Some(label)))).count();
             let tables = tables_html(s, row_count);
             doc.push_str(&format!(
-                r#"<li id="step-{key}" style="display:flex;gap:12px"><span style="width:26px;height:26px;border-radius:50%;border:2px dashed var(--iris2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--iris);flex:none">{n}</span><div style="min-width:0"><b>{intent}</b>{count}{notes}{tables}</div></li>"#,
+                r#"<li id="step-{key}" style="display:flex;gap:12px"><span style="width:26px;height:26px;border-radius:50%;border:2px dashed var(--iris2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--iris);flex:none">{n}</span><div style="min-width:0"><b>{intent}</b>{count}{cond}{notes}{tables}</div></li>"#,
                 key = esc(&s.key),
                 intent = esc(&s.intent),
+                cond = step_conditions(s),
                 count = if count > 0 { format!(r#" <span class="pill amber">{count} open</span>"#) } else { String::new() },
                 notes = if s.notes.trim().is_empty() { String::new() } else { format!(r#"<div class="md small">{}</div>"#, md(&s.notes)) },
             ));

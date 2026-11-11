@@ -79,9 +79,10 @@ impl Masker {
                 _ => {}
             }
         }
-        let Ok(mut j) = serde_json::to_value(&v) else { return v };
+        // Fail closed: results that can't be masked must not be written unmasked.
+        let mut j = serde_json::to_value(&v).expect("recorded results serialize to JSON");
         walk(self, &mut j);
-        serde_json::from_value(j).unwrap_or(v)
+        serde_json::from_value(j).expect("masked results read back as they were written")
     }
 
     pub fn mask_header(&self, name: &str, value: &str) -> String {
@@ -194,5 +195,45 @@ mod tests {
         assert_eq!(m.mask("/other?t=abcdef123456"), "/other?t=•••invite_link•••");
         let v: Value = m.scrub(serde_json::json!({ "a": ["x http://app.test/accept?token=abcdef123456"] }));
         assert_eq!(v["a"][0], "x •••invite_link•••");
+    }
+
+    #[test]
+    fn scrub_keeps_everything_else_as_it_was() {
+        use enocone_spec::results::{Attempt, FlowResult, RowResult, RunInfo, RunResults, Status, StepResult, Summary};
+        let src = |p: &str| std::fs::read_to_string(format!("{}/../../e2e/fixtures/{p}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let step = |status: Status, note: Option<&str>, rows: Vec<RowResult>| StepResult {
+            key: "k".into(),
+            status,
+            duration_ms: 1,
+            error: None,
+            note: note.map(String::from),
+            records: vec![],
+            captured: vec![],
+            screenshot: None,
+            snapshot: None,
+            page_url: None,
+            console: vec![],
+            children: vec![],
+            rows,
+        };
+        let flows: Vec<FlowResult> =
+            ["for-each/flows/setup/limit.flow.md", "conditions/flows/invites/pending.flow.md", "independent-tables/flows/access/callers.flow.md", "tables/flows/pricing/orders.flow.md"]
+                .iter()
+                .map(|p| {
+                    let rows = vec![
+                        RowResult { row: 1, table: 0, table_name: None, label: "a".into(), line: 3, result: step(Status::Passed, None, vec![]) },
+                        RowResult { row: 2, table: 1, table_name: Some("refused".into()), label: "b".into(), line: 4, result: step(Status::Skipped, Some("skipped: only if x"), vec![]) },
+                    ];
+                    let attempts = vec![Attempt { status: Some(Status::Passed), steps: vec![step(Status::Passed, None, rows)], ..Default::default() }];
+                    FlowResult { flow: enocone_spec::parse_flow(p, &src(p)).flow, status: Status::Passed, skip_reason: None, duration_ms: 1, attempts }
+                })
+                .collect();
+        let results = RunResults { schema: enocone_spec::results::RESULTS_SCHEMA.into(), run: RunInfo::default(), summary: Summary::from_flows(&flows), flows, theme: None };
+        let m = Masker::default();
+        m.add_capture("never_seen", "a value that appears nowhere");
+        let before = serde_json::to_value(&results).unwrap();
+        let text = before.to_string();
+        assert!(text.contains("\"for_each\"") && text.contains("\"only_if\"") && text.contains("\"parent\"") && text.contains("\"table_name\""));
+        assert_eq!(serde_json::to_value(m.scrub(results)).unwrap(), before);
     }
 }

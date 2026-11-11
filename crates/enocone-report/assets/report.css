@@ -339,3 +339,6 @@ header.top .crumbs a.danger { border-color: rgba(255,150,150,.55); color: #FFD9D
 .untitled { font-style: italic; opacity: .75; }
 .details.lbls { margin-bottom: 8px; }
 .sdetail > .blk { margin-bottom: 14px; }
+
+.step .cond { color: var(--muted, #5b6170); margin: 2px 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.step .cond b { font-family: Inter, system-ui, sans-serif; font-weight: 600; }

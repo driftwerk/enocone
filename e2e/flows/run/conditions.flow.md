@@ -85,6 +85,7 @@ flowchart LR
    ```browser
    # The report shows Ben's row as skipped, and why
    - goto: "file://{{run.tmp}}/out/index.html#flow=invites.pending"
+   - expect: { text: "== \"Pending\"" }
    - expect: { role: row, name: "ben Active skipped" }
    - click: { role: row, name: "ben Active skipped" }
    - expect: { text: "status was \"Active\"" }
