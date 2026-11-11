@@ -158,6 +158,10 @@ A step can also repeat over a list captured earlier: a line
 `For each: {{old_ids}}` runs its blocks once per item, as `{{item}}`, so a
 setup flow can delete every old resource before creating a fresh one.
 
+Captures that grant access, such as an invite link from an email, can be
+marked `secret: true` (or listed under `[mask] captures` in enocone.toml).
+They are then masked as `•••name•••` in results, reports and published runs.
+
 ## The team site
 
 `enocone serve` (or enoc.one) shares flows, runs and review comments with the

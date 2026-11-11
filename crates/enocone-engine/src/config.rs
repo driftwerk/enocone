@@ -38,6 +38,16 @@ pub struct Config {
     /// Where `enocone publish` sends runs.
     #[serde(default)]
     pub hub: Option<HubConfig>,
+    /// Captures to mask in everything recorded, by name, for every flow.
+    #[serde(default)]
+    pub mask: MaskConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaskConfig {
+    #[serde(default)]
+    pub captures: Vec<String>,
 }
 
 /// `[hub]`: the team site runs are published to.

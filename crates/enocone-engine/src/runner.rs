@@ -209,7 +209,7 @@ impl Engine {
                 Err(e) => (self.events)(Event::Log(format!("internal error: {e}"))),
             }
         }
-        RunResults {
+        self.masker.scrub(RunResults {
             schema: RESULTS_SCHEMA.into(),
             run: RunInfo {
                 id: self.opts.run_id.clone(),
@@ -226,7 +226,7 @@ impl Engine {
             summary: Summary::from_flows(&results),
             flows: results,
             theme: None,
-        }
+        })
     }
 
     fn skip_reason(&self, flow: &Flow) -> Option<(Status, String)> {
@@ -284,7 +284,22 @@ impl Engine {
         }
         let last = attempts.last().and_then(|a| a.status).unwrap_or(Status::Failed);
         let status = if last == Status::Passed && attempts.len() > 1 { Status::Flaky } else { last };
-        FlowResult { flow, status, skip_reason: None, duration_ms: started.elapsed().as_millis() as u64, attempts }
+        // Values captured as secret were recorded before they were known: mask them everywhere now.
+        self.masker.scrub(FlowResult { flow, status, skip_reason: None, duration_ms: started.elapsed().as_millis() as u64, attempts })
+    }
+
+    /// Keep a block's captures for later steps; secret ones are masked from now on.
+    fn keep(&self, st: &mut FlowState, r: &mut StepResult, captured: Vec<(String, Value)>, secret_names: &[String]) {
+        for (k, v) in captured {
+            if secret_names.contains(&k) || self.project.config.mask.captures.contains(&k) {
+                match &v {
+                    Value::String(s) => self.masker.add_capture(&k, s),
+                    other => self.masker.add_capture(&k, &other.to_string()),
+                }
+            }
+            r.captured.push((k.clone(), self.masker.mask(&value_preview(&v))));
+            st.vars.set(&k, v);
+        }
     }
 
     async fn attempt(&self, flow: &Flow, n: u32) -> Attempt {
@@ -484,13 +499,14 @@ impl Engine {
                     continue;
                 }
                 ran += 1;
-                let rendered = match render(&raw.value, &st.vars) {
+                let mut rendered = match render(&raw.value, &st.vars) {
                     Ok(v) => v,
                     Err(e) => {
                         r.error = Some(StepError { message: e, expected: None, actual: None });
                         break;
                     }
                 };
+                let secret_names = enocone_spec::blocks::take_secret_captures(&mut rendered);
                 let block = match Block::from_raw(raw.kind, &rendered) {
                     Ok(b) => b,
                     Err(e) => {
@@ -512,10 +528,7 @@ impl Engine {
                         };
                         let out = run_http(&self.http, &spec, &auth, &self.masker, self.opts.timeout).await;
                         r.records.push(Record::Http(out.record));
-                        for (k, v) in out.captured {
-                            r.captured.push((k.clone(), self.masker.mask(&value_preview(&v))));
-                            st.vars.set(&k, v);
-                        }
+                        self.keep(st, &mut r, out.captured, &secret_names);
                         if let Some(e) = out.error {
                             r.error = Some(e);
                             break;
@@ -533,10 +546,7 @@ impl Engine {
                         used_browser = Some(key);
                         wants_shot |= out.wants_screenshot;
                         r.records.extend(out.records.into_iter().map(Record::Action));
-                        for (k, v) in out.captured {
-                            r.captured.push((k.clone(), self.masker.mask(&value_preview(&v))));
-                            st.vars.set(&k, v);
-                        }
+                        self.keep(st, &mut r, out.captured, &secret_names);
                         if let Some(e) = out.error {
                             r.error = Some(e);
                             break;
@@ -550,10 +560,7 @@ impl Engine {
                         }
                         let out = run_exec(&spec, &self.project.root, &self.masker, self.opts.timeout).await;
                         r.records.push(Record::Exec(out.record));
-                        for (k, v) in out.captured {
-                            r.captured.push((k.clone(), self.masker.mask(&value_preview(&v))));
-                            st.vars.set(&k, v);
-                        }
+                        self.keep(st, &mut r, out.captured, &secret_names);
                         if let Some(e) = out.error {
                             r.error = Some(e);
                             break;
@@ -569,10 +576,7 @@ impl Engine {
                         };
                         let out = run_email(&self.http, &mailbox, &spec, st.started, &self.masker).await;
                         r.records.push(Record::Email(out.record));
-                        for (k, v) in out.captured {
-                            r.captured.push((k.clone(), self.masker.mask(&value_preview(&v))));
-                            st.vars.set(&k, v);
-                        }
+                        self.keep(st, &mut r, out.captured, &secret_names);
                         if let Some(e) = out.error {
                             r.error = Some(e);
                             break;

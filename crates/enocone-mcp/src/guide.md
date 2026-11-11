@@ -379,6 +379,13 @@ captured earlier (`{{lead_id}}`, `{{quote.items.0.id}}`).
 `{{secret.X | default: value}}` gives a fallback. A value that is only a
 template keeps its type (numbers stay numbers).
 
+A captured value that grants access (an invite or reset link, a token) can
+be marked secret: `capture: { invite_link: { link: "Accept", secret: true } }`.
+From then on it, and its URL-encoded form, is recorded as
+`•••invite_link•••` in every output, including what is published. The flow
+still uses the real value. `[mask] captures = ["invite_link"]` in
+enocone.toml does the same for every flow.
+
 ## Auth profiles
 
 Defined in enocone.toml (`[auth.<name>]`): `header`, `bearer`, `oauth2`, or

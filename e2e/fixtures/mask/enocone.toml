@@ -1,0 +1,16 @@
+# Used by enocone's own suite (e2e/flows/run/mask-captures.flow.md): an
+# invite link captured from an email, marked secret, against the fixture app.
+project = "mask-fixture"
+default_env = "local"
+
+[run]
+timeout = "3s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"
+API = "http://127.0.0.1:4010/api"
+
+[email]
+provider = "postmark"
+url = "{{env.WEB}}/postmark"
+token = "{{secret.POSTMARK_TOKEN | default: fixture-postmark-token}}"

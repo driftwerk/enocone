@@ -8,32 +8,82 @@ use serde_json::{Map, Value};
 /// Remembers secret values and hides them in recorded output.
 #[derive(Default, Clone)]
 pub struct Masker {
-    secrets: Arc<Mutex<Vec<String>>>,
+    /// (value, what replaces it), longest first.
+    secrets: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 pub const MASK: &str = "••••";
 
 impl Masker {
     pub fn add(&self, secret: &str) {
+        self.add_as(secret, MASK);
+    }
+
+    /// A captured value marked secret: shown as `•••name•••`, so a reader can
+    /// tell which value went where. Its URL-encoded forms, and the values of
+    /// its own query parameters, are masked the same way.
+    pub fn add_capture(&self, name: &str, secret: &str) {
+        let label = format!("•••{name}•••");
+        self.add_as(secret, &label);
+        self.add_as(&url_encode(secret, false), &label);
+        self.add_as(&url_encode(secret, true), &label);
+        if let Some((_, query)) = secret.split_once('?') {
+            for pair in query.split('#').next().unwrap_or("").split('&') {
+                if let Some((_, v)) = pair.split_once('=')
+                    && v.len() >= 8
+                {
+                    self.add_as(v, &label);
+                    self.add_as(&url_encode(v, false), &label);
+                }
+            }
+        }
+    }
+
+    fn add_as(&self, secret: &str, label: &str) {
         if secret.len() < 4 {
             return;
         }
         let mut s = self.secrets.lock().unwrap();
-        if !s.iter().any(|x| x == secret) {
-            s.push(secret.to_string());
+        if !s.iter().any(|(x, _)| x == secret) {
+            s.push((secret.to_string(), label.to_string()));
             // Longest first so overlapping secrets are fully hidden.
-            s.sort_by_key(|x| std::cmp::Reverse(x.len()));
+            s.sort_by_key(|(x, _)| std::cmp::Reverse(x.len()));
         }
     }
+
     pub fn mask(&self, text: &str) -> String {
         let mut out = text.to_string();
-        for s in self.secrets.lock().unwrap().iter() {
+        for (s, label) in self.secrets.lock().unwrap().iter() {
             if out.contains(s.as_str()) {
-                out = out.replace(s.as_str(), MASK);
+                out = out.replace(s.as_str(), label);
             }
         }
         out
     }
+
+    /// Mask every string in a recorded value (results, before they are written).
+    pub fn scrub<T: serde::Serialize + serde::de::DeserializeOwned>(&self, v: T) -> T {
+        if self.secrets.lock().unwrap().is_empty() {
+            return v;
+        }
+        fn walk(m: &Masker, v: &mut Value) {
+            match v {
+                Value::String(s) => {
+                    let masked = m.mask(s);
+                    if masked != *s {
+                        *s = masked;
+                    }
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| walk(m, x)),
+                Value::Object(o) => o.values_mut().for_each(|x| walk(m, x)),
+                _ => {}
+            }
+        }
+        let Ok(mut j) = serde_json::to_value(&v) else { return v };
+        walk(self, &mut j);
+        serde_json::from_value(j).unwrap_or(v)
+    }
+
     pub fn mask_header(&self, name: &str, value: &str) -> String {
         let n = name.to_ascii_lowercase();
         if n == "authorization" || n == "cookie" || n == "set-cookie" || n.contains("api-key") || n.contains("token") || n.contains("secret") {
@@ -112,5 +162,37 @@ impl Resolver for Vars {
         k.extend(self.env.keys().map(|e| format!("env.{e}")));
         k.push("run.id".into());
         k
+    }
+}
+
+/// Percent-encode everything but unreserved characters, as a URL inside
+/// another URL's query is written (`lower` for lower-case hex).
+fn url_encode(s: &str, lower: bool) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else if lower {
+            out.push_str(&format!("%{b:02x}"));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn masks_a_capture_and_its_encoded_forms() {
+        let m = Masker::default();
+        m.add_capture("invite_link", "http://app.test/accept?token=abcdef123456");
+        assert_eq!(m.mask("open http://app.test/accept?token=abcdef123456 now"), "open •••invite_link••• now");
+        assert_eq!(m.mask("/login?next=http%3A%2F%2Fapp.test%2Faccept%3Ftoken%3Dabcdef123456"), "/login?next=•••invite_link•••");
+        assert_eq!(m.mask("/other?t=abcdef123456"), "/other?t=•••invite_link•••");
+        let v: Value = m.scrub(serde_json::json!({ "a": ["x http://app.test/accept?token=abcdef123456"] }));
+        assert_eq!(v["a"][0], "x •••invite_link•••");
     }
 }

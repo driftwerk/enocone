@@ -263,7 +263,13 @@ async fn payment_status(State(s): State<S>, h: HeaderMap, Path(q): Path<String>)
     }
 }
 
-async fn accept_page(State(s): State<S>, Path((q, token)): Path<(String, String)>) -> Response {
+async fn accept_page(State(s): State<S>, h: HeaderMap, Path((q, token)): Path<(String, String)>) -> Response {
+    // This page's own address, URL-encoded inside another link, as sign-in links often carry it.
+    let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("127.0.0.1");
+    let here: String = format!("http://{host}/public/quotes/{q}/accept/{token}")
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
     let db = s.lock().unwrap();
     let Some(quote) = db.quotes.get(&q).filter(|q| q["accept_token"] == json!(token)) else {
         return (StatusCode::NOT_FOUND, page("Not found", "<h1>This link has expired</h1>")).into_response();
@@ -271,10 +277,10 @@ async fn accept_page(State(s): State<S>, Path((q, token)): Path<(String, String)
     page(
         "Your quote",
         &format!(
-            r#"<h1>Your conveyancing quote</h1><p>Total: {}</p>
+            r#"<h1>Your conveyancing quote</h1><p>Total: {}</p><p>Not you? <a href="/login?next={here}">Sign in as someone else</a> <small>(/login?next={here})</small></p>
 <form method="post"><label><input type="checkbox" name="terms" value="yes"> I accept the terms of engagement</label>
 <button type="submit">Accept quote</button></form>"#,
-            money(quote["total"].as_i64().unwrap_or(0))
+            money(quote["total"].as_i64().unwrap_or(0)),
         ),
     )
     .into_response()

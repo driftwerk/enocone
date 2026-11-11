@@ -17,8 +17,51 @@ pub enum Block {
     Email(EmailSpec),
 }
 
+/// Take `secret: true` out of a block's captures (top-level `capture:`, or a
+/// browser block's `- capture:` actions), returning the names marked secret.
+pub fn take_secret_captures(v: &mut Value) -> Vec<String> {
+    fn from_map(c: &mut Value, out: &mut Vec<String>) {
+        let Some(m) = c.as_object_mut() else { return };
+        for (name, spec) in m.iter_mut() {
+            if let Some(o) = spec.as_object_mut()
+                && let Some(s) = o.remove("secret")
+                && s == Value::Bool(true)
+            {
+                out.push(name.clone());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    match v {
+        Value::Object(m) => {
+            if let Some(c) = m.get_mut("capture") {
+                from_map(c, &mut out);
+            }
+            if let Some(Value::Array(actions)) = m.get_mut("steps") {
+                for a in actions {
+                    if let Some(c) = a.get_mut("capture") {
+                        from_map(c, &mut out);
+                    }
+                }
+            }
+        }
+        Value::Array(actions) => {
+            for a in actions {
+                if let Some(c) = a.get_mut("capture") {
+                    from_map(c, &mut out);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
 impl Block {
     pub fn from_raw(kind: BlockKind, v: &Value) -> Result<Block, String> {
+        let mut v = v.clone();
+        take_secret_captures(&mut v);
+        let v = &v;
         match kind {
             BlockKind::Http => HttpSpec::from_value(v).map(Block::Http),
             BlockKind::Browser => BrowserSpec::from_value(v).map(Block::Browser),
