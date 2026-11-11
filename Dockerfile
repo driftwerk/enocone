@@ -1,12 +1,12 @@
 # enocone with Chromium, for CI systems that run containers.
 #   docker build -t enocone .
 #   docker run --rm -v "$PWD:/work" -w /work -e ENOCONE_VAR_API=… enocone run --env staging
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p enocone-cli
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
 # The same layout as the release archives: the Playwright driver the build
 # assembled (Node plus its CLI) sits beside the binary, where it looks first.
