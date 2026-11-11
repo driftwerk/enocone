@@ -28,6 +28,10 @@ struct Db {
     emails: Vec<Email>,
     /// Short-lived access tokens: token → (serial, issued at).
     short_tokens: HashMap<String, (u64, std::time::Instant)>,
+    /// Named resources a setup flow tidies up: id → {id, name, group}.
+    resources: HashMap<String, Value>,
+    /// Invites sent: (group, person).
+    invites: Vec<(String, String)>,
 }
 
 /// How long a short-lived token lasts.
@@ -96,6 +100,11 @@ pub fn app() -> Router {
         .route("/api/quotes", post(create_quote))
         .route("/api/discount", post(discount))
         .route("/api/orders", post(order_total))
+        .route("/api/reports/{who}", get(report_access))
+        .route("/api/people/{group}", get(people))
+        .route("/api/invites/{group}", post(invite).get(invites))
+        .route("/api/resources/{group}", post(create_resource).get(list_resources))
+        .route("/api/resources/{group}/{id}", axum::routing::delete(delete_resource))
         .route("/api/quotes/{id}/payment-status", get(payment_status))
         .route("/public/quotes/{id}/accept/{token}", get(accept_page).post(accept))
         .route("/public/quotes/{id}/pay", get(pay_page).post(pay))
@@ -579,6 +588,59 @@ async fn discount(Json(b): Json<Value>) -> Json<Value> {
         (true, true) => 10,
     };
     Json(json!({ "discount": format!("{pct}%") }))
+}
+
+/// Who may read the reports: admins (200), members are refused (403), anyone else isn't known (404).
+async fn report_access(Path(who): Path<String>) -> Response {
+    match who.as_str() {
+        "admin" => Json(json!({ "reports": 3 })).into_response(),
+        "member" => (StatusCode::FORBIDDEN, Json(json!({ "error": "not allowed" }))).into_response(),
+        _ => (StatusCode::NOT_FOUND, Json(json!({ "error": "no such user" }))).into_response(),
+    }
+}
+
+/// Three people and their invite status; the same for every group.
+async fn people(Path(_group): Path<String>) -> Json<Value> {
+    Json(json!([
+        { "name": "ana", "status": "Pending" },
+        { "name": "ben", "status": "Active" },
+        { "name": "cy", "status": "Pending" }
+    ]))
+}
+
+async fn invite(State(s): State<S>, Path(group): Path<String>, Json(b): Json<Value>) -> Response {
+    let who = b["name"].as_str().unwrap_or("").to_string();
+    s.lock().unwrap().invites.push((group, who.clone()));
+    (StatusCode::CREATED, Json(json!({ "invited": who }))).into_response()
+}
+
+async fn invites(State(s): State<S>, Path(group): Path<String>) -> Json<Value> {
+    let names: Vec<String> = s.lock().unwrap().invites.iter().filter(|(g, _)| *g == group).map(|(_, n)| n.clone()).collect();
+    Json(json!({ "invited": names }))
+}
+
+async fn create_resource(State(s): State<S>, Path(group): Path<String>, Json(b): Json<Value>) -> Response {
+    let rid = id("res");
+    let r = json!({ "id": rid, "name": b["name"], "group": group });
+    s.lock().unwrap().resources.insert(rid, r.clone());
+    (StatusCode::CREATED, Json(r)).into_response()
+}
+
+async fn list_resources(State(s): State<S>, Path(group): Path<String>) -> Json<Value> {
+    let mut list: Vec<Value> = s.lock().unwrap().resources.values().filter(|r| r["group"] == group).cloned().collect();
+    list.sort_by_key(|r| r["id"].as_str().unwrap_or("").to_string());
+    Json(json!({ "results": list }))
+}
+
+async fn delete_resource(State(s): State<S>, Path((group, rid)): Path<(String, String)>) -> StatusCode {
+    let mut db = s.lock().unwrap();
+    match db.resources.get(&rid) {
+        Some(r) if r["group"] == group => {
+            db.resources.remove(&rid);
+            StatusCode::NO_CONTENT
+        }
+        _ => StatusCode::NOT_FOUND,
+    }
 }
 
 /// The order's total: the sum of quantity × price over its items.

@@ -1,0 +1,11 @@
+# Used by enocone's own suite (e2e/flows/run/table-expectations.flow.md): a
+# table that sets each row's expected status, against the fixture app's
+# /api/reports/{who}.
+project = "table-expectations-fixture"
+default_env = "local"
+
+[env.local]
+API = "http://127.0.0.1:4010/api"
+
+[run]
+allow_exec = true

@@ -343,8 +343,7 @@ impl HttpExpect {
         check_keys(m, &["status", "json", "headers", "body"], "http expect")?;
         let status = match m.get("status") {
             None => vec![],
-            Some(Value::Array(a)) => a.iter().map(status_code).collect::<Result<_, _>>()?,
-            Some(s) => vec![status_code(s)?],
+            Some(s) => statuses(s)?,
         };
         let json = match m.get("json") {
             None => vec![],
@@ -370,11 +369,47 @@ impl HttpExpect {
     }
 }
 
-fn status_code(v: &Value) -> Result<u16, String> {
+/// A value still holding a `{{…}}` template: filled in per row when the step runs.
+fn templated(v: &Value) -> bool {
+    matches!(v, Value::String(s) if s.contains("{{"))
+}
+
+/// Expected statuses: `200`, `[200, 201]` or `"200, 201"` (a table cell).
+fn statuses(v: &Value) -> Result<Vec<u16>, String> {
     match v {
-        Value::Number(n) => n.as_u64().map(|n| n as u16).ok_or_else(|| format!("bad status {v}")),
-        Value::String(s) => s.parse().map_err(|_| format!("bad status {s:?}")),
-        _ => Err(format!("bad status {v}")),
+        _ if templated(v) => Ok(vec![]),
+        Value::Array(a) => a.iter().map(status_code).collect(),
+        Value::String(s) if s.contains(',') => s.split(',').map(|p| status_code(&Value::String(p.trim().into()))).collect(),
+        _ => Ok(vec![status_code(v)?]),
+    }
+}
+
+fn status_code(v: &Value) -> Result<u16, String> {
+    let bad = || format!("status {v} isn't a status code: write one such as 200, or a list such as [200, 201]");
+    let n = match v {
+        Value::Number(n) => n.as_u64().ok_or_else(bad)?,
+        Value::String(s) => s.trim().parse().map_err(|_| bad())?,
+        _ => return Err(bad()),
+    };
+    if (100..600).contains(&n) { Ok(n as u16) } else { Err(bad()) }
+}
+
+/// Expected exit codes: `0`, `[0, 1]`, `"0, 1"` (a table cell) or `"any"`.
+fn exit_codes(v: &Value) -> Result<Option<Vec<i32>>, String> {
+    let bad = || format!("exit {v} isn't an exit code: write a number such as 0, a list such as [0, 1], or \"any\"");
+    let one = |x: &Value| -> Result<i32, String> {
+        match x {
+            Value::Number(n) => n.as_i64().map(|n| n as i32).ok_or_else(bad),
+            Value::String(s) => s.trim().parse().map_err(|_| bad()),
+            _ => Err(bad()),
+        }
+    };
+    match v {
+        _ if templated(v) => Ok(Some(vec![0])),
+        Value::String(s) if s == "any" => Ok(None),
+        Value::Array(a) => a.iter().map(one).collect::<Result<_, _>>().map(Some),
+        Value::String(s) if s.contains(',') => s.split(',').map(|p| one(&Value::String(p.into()))).collect::<Result<_, _>>().map(Some),
+        _ => Ok(Some(vec![one(v)?])),
     }
 }
 
@@ -1092,9 +1127,7 @@ impl ExecSpec {
             check_keys(em, &["exit", "stdout", "stderr", "json"], "exec expect")?;
             expect.exit = match em.get("exit") {
                 None => Some(vec![0]),
-                Some(Value::String(s)) if s == "any" => None,
-                Some(Value::Array(a)) => Some(a.iter().map(|x| x.as_i64().map(|n| n as i32).ok_or("exit codes must be numbers")).collect::<Result<_, _>>()?),
-                Some(x) => Some(vec![x.as_i64().ok_or("`exit` must be a number, a list, or \"any\"")? as i32]),
+                Some(x) => exit_codes(x)?,
             };
             expect.stdout = em.get("stdout").map(text_matcher).transpose()?;
             expect.stderr = em.get("stderr").map(text_matcher).transpose()?;

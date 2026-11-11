@@ -319,6 +319,10 @@ its own.
   `_`, without a trailing `?`. Numbers and `true`/`false` keep their type
   when the value is only the template (`"{{row.total}}"` sends 40).
 - A header ending in `?` is an expected result; the others are inputs.
+- Expectations can come from the row too, so one table states an access
+  matrix: `status: "{{row.status}}"`, `exit: "{{row.exit}}"`. Quote the
+  template. A cell can hold a list (`200, 201`). A cell that isn't a valid
+  value fails only that row.
 - Data with parts uses a second, linked table: name the first with a
   `Table: orders` line above it, and give the second (`Table: items`) a column
   named `orders` holding the id (first column) of the order each line belongs
