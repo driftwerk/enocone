@@ -347,19 +347,24 @@ impl Engine {
     /// Run a step: once, or once per row of its table of examples.
     fn exec_step<'a>(&'a self, st: &'a mut FlowState, step: &'a Step, prefix: &'a str) -> StepFuture<'a> {
         Box::pin(async move {
-            let Some(driver) = step.tables.first() else { return self.exec_step_once(st, step, prefix).await };
+            if step.tables.is_empty() {
+                return self.exec_step_once(st, step, prefix).await;
+            }
             let started = Instant::now();
+            let several = step.drivers().len() > 1;
             // Each row starts from the values captured before the table; nothing carries between rows.
             let before = st.vars.captured.clone();
             let mut rows = Vec::new();
-            for (i, tr) in driver.rows.iter().enumerate() {
+            for (t, i) in step.row_refs() {
                 st.vars.captured = before.clone();
-                if let Some(v) = step.row_value(i) {
+                if let Some(v) = step.row_value_in(t, i) {
                     st.vars.set("row", v);
                 }
-                let row_prefix = format!("{prefix}row{}-", i + 1);
+                let row_prefix = if t == 0 { format!("{prefix}row{}-", i + 1) } else { format!("{prefix}t{}row{}-", t + 1, i + 1) };
                 let result = self.exec_step_once(st, step, &row_prefix).await;
-                rows.push(RowResult { row: i + 1, label: step.row_label(i), line: tr.line, result });
+                let line = step.tables[t].rows[i].line;
+                let table_name = several.then(|| step.table_name(t));
+                rows.push(RowResult { row: i + 1, table: t, table_name, label: step.row_label_in(t, i), line, result });
             }
             st.vars.captured = before;
             let failed: Vec<&RowResult> = rows.iter().filter(|r| r.result.status == Status::Failed).collect();
@@ -373,7 +378,8 @@ impl Engine {
             let error = failed.first().map(|f| {
                 let e = f.result.error.clone().unwrap_or(StepError { message: "failed".into(), expected: None, actual: None });
                 let more = if failed.len() > 1 { format!(" ({} of {} rows failed)", failed.len(), rows.len()) } else { String::new() };
-                StepError { message: format!("row {} ({}): {}{more}", f.row, f.label, e.message), expected: e.expected, actual: e.actual }
+                let of = f.table_name.as_ref().map(|n| format!(" of {n}")).unwrap_or_default();
+                StepError { message: format!("row {}{of} ({}): {}{more}", f.row, f.label, e.message), expected: e.expected, actual: e.actual }
             });
             StepResult {
                 key: step.key.clone(),

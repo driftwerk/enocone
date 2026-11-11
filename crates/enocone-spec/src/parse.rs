@@ -442,7 +442,7 @@ pub fn parse_flow(path: &str, source: &str) -> Parsed {
                         && let Some(p) = pending.as_mut()
                     {
                         let columns = t.header.iter().map(|h| Column::new(h)).collect();
-                        p.tables.push(Table { name: t.name, columns, rows: t.rows, link: None, line: t.line });
+                        p.tables.push(Table { name: t.name, columns, rows: t.rows, link: None, parent: None, line: t.line });
                     }
                 }
                 _ => {}
@@ -727,46 +727,46 @@ fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Dia
             err(diags, t.line, "table has no rows".into());
         }
     }
-    if tables.len() > 1 {
-        let driver_name = tables[0].name.clone();
-        match &driver_name {
-            None => err(diags, tables[0].line, "this step has several tables: name the first one with a `Table: <name>` line above it, so the others can link to it".into()),
-            Some(dn) => {
-                let dkey = column_key(dn);
-                let ids: std::collections::HashSet<String> = tables[0].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
-                for t in tables.iter_mut().skip(1) {
-                    let Some(name) = t.name.clone() else {
-                        err(diags, t.line, "name this table with a `Table: <name>` line above it, so blocks can use its rows as `{{row.<name>}}`".to_string());
-                        continue;
-                    };
-                    match t.columns.iter().position(|c| c.key == dkey) {
-                        None => err(
-                            diags,
-                            t.line,
-                            format!(
-                                "table `{name}` doesn't link to `{dn}`: add a column named `{dn}` holding the id (first column) of the `{dn}` row each line belongs to. Tables link one level deep, to the step's first table"
-                            ),
-                        ),
-                        Some(i) => {
-                            t.link = Some(i);
-                            for r in &t.rows {
-                                let id = r.cells.get(i).map(|c| c.trim()).unwrap_or("");
-                                if !ids.contains(id) {
-                                    err(diags, r.line, format!("`{id}` in the `{dn}` column of table `{name}` isn't the id of any row in `{dn}`"));
-                                }
-                            }
-                        }
-                    }
-                }
+    // A table is linked when it has a column named after another table in the
+    // step; the rest are independent and each drives the step.
+    let names: Vec<Option<String>> = tables.iter().map(|t| t.name.as_deref().map(column_key)).collect();
+    for ti in 0..tables.len() {
+        let found = tables[ti].columns.iter().enumerate().find_map(|(ci, c)| names.iter().enumerate().find(|(pi, n)| *pi != ti && n.as_deref() == Some(c.key.as_str())).map(|(pi, _)| (ci, pi)));
+        if let Some((ci, pi)) = found {
+            tables[ti].link = Some(ci);
+            tables[ti].parent = Some(pi);
+        }
+    }
+    for ti in 0..tables.len() {
+        let (Some(ci), Some(pi)) = (tables[ti].link, tables[ti].parent) else { continue };
+        let name = tables[ti].name.clone().unwrap_or_else(|| format!("table {}", ti + 1));
+        let pn = tables[pi].name.clone().unwrap_or_default();
+        if tables[pi].link.is_some() {
+            err(diags, tables[ti].line, format!("table `{name}` is linked to `{pn}` through its `{pn}` column, but `{pn}` is itself linked to another table: tables link one level deep"));
+            continue;
+        }
+        if tables[ti].name.is_none() {
+            err(
+                diags,
+                tables[ti].line,
+                format!("this table is linked to `{pn}` through its `{pn}` column: name it with a `Table: <name>` line above it, so blocks can use its rows as `{{{{row.<name>}}}}`"),
+            );
+        }
+        let ids: std::collections::HashSet<String> = tables[pi].rows.iter().map(|r| r.cells.first().map(|c| c.trim().to_string()).unwrap_or_default()).collect();
+        for r in &tables[ti].rows {
+            let id = r.cells.get(ci).map(|c| c.trim()).unwrap_or("");
+            if !ids.contains(id) {
+                err(diags, r.line, format!("`{id}` in the `{pn}` column of table `{name}` isn't the id of any row in `{pn}` (it is linked to `{pn}` through that column)"));
             }
         }
     }
-    // `{{row.x}}` must name a column of the first table, or a linked table.
-    let known: Vec<String> = match tables.first() {
-        Some(d) => d.columns.iter().map(|c| c.key.clone()).chain(tables.iter().skip(1).filter_map(|t| t.name.as_deref().map(column_key))).collect(),
-        None => vec![],
+    // `{{row.x}}` must name a column of every driving table, or a table linked to it.
+    let drivers: Vec<usize> = (0..tables.len()).filter(|&t| tables[t].link.is_none()).collect();
+    let known = |d: usize| -> Vec<String> {
+        tables[d].columns.iter().map(|c| c.key.clone()).chain(tables.iter().filter(|t| t.link.is_some() && t.parent == Some(d)).filter_map(|t| t.name.as_deref().map(column_key))).collect()
     };
     for b in blocks {
+        let mut said = std::collections::HashSet::new();
         for v in crate::template::variables(&b.value) {
             let mut parts = v.split('.');
             if parts.next() != Some("row") {
@@ -775,8 +775,26 @@ fn check_tables(mut tables: Vec<Table>, blocks: &[RawBlock], diags: &mut Vec<Dia
             let col = parts.next().unwrap_or("");
             if tables.is_empty() {
                 err(diags, b.line, format!("`{{{{{v}}}}}` refers to a table row, but this step has no table"));
-            } else if !known.iter().any(|k| k == col) {
-                err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", known.join(", ")));
+                continue;
+            }
+            for &d in &drivers {
+                let k = known(d);
+                if k.iter().any(|x| x == col) || !said.insert((d, col.to_string())) {
+                    continue;
+                }
+                if drivers.len() == 1 {
+                    err(diags, b.line, format!("`{{{{{v}}}}}`: the table has no column `{col}` (columns: {})", k.join(", ")));
+                } else {
+                    let tn = tables[d].name.clone().map(|n| format!("table `{n}`")).unwrap_or_else(|| format!("table {}", d + 1));
+                    err(
+                        diags,
+                        b.line,
+                        format!(
+                            "`{{{{{v}}}}}`: {tn} has no column `{col}` (columns: {}). The step's tables are independent (none has a column named after another), so each needs every column the blocks use",
+                            k.join(", ")
+                        ),
+                    );
+                }
             }
         }
     }

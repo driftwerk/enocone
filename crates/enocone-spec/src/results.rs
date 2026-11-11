@@ -174,6 +174,12 @@ pub struct StepResult {
 pub struct RowResult {
     /// 1-based, in the table's order.
     pub row: usize,
+    /// Which of the step's tables the row is in (0, the first, when left out).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub table: usize,
+    /// That table's name, when the step runs several tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_name: Option<String>,
     /// The row's inputs, e.g. "returning, 120".
     pub label: String,
     /// Its line in the flow file.
@@ -316,4 +322,8 @@ pub fn value_preview(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }

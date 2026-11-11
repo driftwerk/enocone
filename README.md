@@ -146,7 +146,8 @@ The report shows the table with each row's result, and reviewers on the team
 site can comment on a single row. For data with parts, a second table links
 to the first: name them with `Table: orders` and `Table: items` lines, give
 `items` an `orders` column, and `{{row.items}}` is that order's items.
-Expected values can come from the row as well (`status: "{{row.status}}"`),
+Tables that don't link to each other are separate lists of cases: the step
+runs for every row of each. Expected values can come from the row as well (`status: "{{row.status}}"`),
 so one table can state who gets 200, 403 or 404.
 
 ## The team site

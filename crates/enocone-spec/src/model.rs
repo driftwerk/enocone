@@ -168,8 +168,9 @@ pub struct Step {
     /// Mockups and diagrams for this step (documentation; never executed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub designs: Vec<crate::design::Design>,
-    /// Tables of examples. The first drives the step: its blocks run once per
-    /// row. Any others are linked to it (one level: orders → items).
+    /// Tables of examples. A table that isn't linked drives the step: its
+    /// blocks run once per row, table after table. A linked table (one with a
+    /// column named after another table) adds its rows to that table's rows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<Table>,
     /// 1-based line of the step in the source.
@@ -187,6 +188,10 @@ pub struct Table {
     /// For a linked table: the index of the column holding the driving row's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<usize>,
+    /// For a linked table: the index of the table it links to (runs saved
+    /// before independent tables existed leave it out: the first table).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<usize>,
     pub line: usize,
 }
 
@@ -252,18 +257,48 @@ pub fn cell_value(cell: &str) -> serde_json::Value {
 }
 
 impl Step {
-    /// The values `{{row.…}}` sees for row `i` of the driving table: each
-    /// column by its key, and each linked table's rows by the table's name.
+    /// The tables whose rows the step runs for: those that aren't linked.
+    pub fn drivers(&self) -> Vec<usize> {
+        (0..self.tables.len()).filter(|&t| self.tables[t].link.is_none()).collect()
+    }
+
+    /// Every row the step runs for, in order: (table, row).
+    pub fn row_refs(&self) -> Vec<(usize, usize)> {
+        self.drivers().into_iter().flat_map(|t| (0..self.tables[t].rows.len()).map(move |i| (t, i))).collect()
+    }
+
+    /// How a table is named in results: its `Table:` name, or "table 2".
+    pub fn table_name(&self, t: usize) -> String {
+        self.tables.get(t).and_then(|x| x.name.clone()).unwrap_or_else(|| format!("table {}", t + 1))
+    }
+
+    /// The row's anchor for comments: its label, prefixed by the table's name
+    /// for any driving table but the first (so the first keeps its old anchors).
+    pub fn row_anchor(&self, t: usize, i: usize) -> String {
+        if self.drivers().first() == Some(&t) { self.row_label_in(t, i) } else { format!("{}: {}", self.table_name(t), self.row_label_in(t, i)) }
+    }
+
+    /// The values `{{row.…}}` sees for row `i` of the first table.
     pub fn row_value(&self, i: usize) -> Option<serde_json::Value> {
-        let driver = self.tables.first()?;
+        self.row_value_in(0, i)
+    }
+
+    /// The values `{{row.…}}` sees for row `i` of driving table `t`: each
+    /// column by its key, and each table linked to it by the table's name.
+    pub fn row_value_in(&self, t: usize, i: usize) -> Option<serde_json::Value> {
+        let driver = self.tables.get(t)?;
         let row = driver.rows.get(i)?;
         let mut m = serde_json::Map::new();
         for (c, col) in driver.columns.iter().enumerate() {
             m.insert(col.key.clone(), cell_value(row.cells.get(c).map(String::as_str).unwrap_or("")));
         }
         let id = row.cells.first().map(|s| s.trim()).unwrap_or("");
-        for t in &self.tables[1..] {
-            let (Some(name), Some(link)) = (&t.name, t.link) else { continue };
+        for lt in &self.tables {
+            let (Some(name), Some(link)) = (&lt.name, lt.link) else { continue };
+            if lt.parent.unwrap_or(0) != t {
+                continue;
+            }
+            let t = lt;
             let items: Vec<serde_json::Value> = t
                 .rows
                 .iter()
@@ -285,7 +320,11 @@ impl Step {
 
     /// "returning, 120": the row's inputs, to name it in results.
     pub fn row_label(&self, i: usize) -> String {
-        let Some(t) = self.tables.first() else { return String::new() };
+        self.row_label_in(0, i)
+    }
+
+    pub fn row_label_in(&self, t: usize, i: usize) -> String {
+        let Some(t) = self.tables.get(t) else { return String::new() };
         let Some(r) = t.rows.get(i) else { return String::new() };
         t.columns.iter().zip(&r.cells).filter(|(c, _)| !c.expected).map(|(_, v)| v.trim()).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(", ")
     }

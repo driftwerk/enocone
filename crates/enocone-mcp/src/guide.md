@@ -327,6 +327,9 @@ its own.
   `Table: orders` line above it, and give the second (`Table: items`) a column
   named `orders` holding the id (first column) of the order each line belongs
   to. `{{row.items}}` is then that order's items as a list. One level only.
+- Several tables in one step are independent unless one links to another:
+  the step runs once per row of each, table after table (allowed callers,
+  then refused callers). Every `{{row.x}}` must be a column of each of them.
 - Rows run one after another; captures don't carry between rows. Use `http`
   or `exec` blocks where you can: a browser block drives the browser per row.
 - `validate` rejects a `{{row.x}}` the table doesn't have, and a linked row

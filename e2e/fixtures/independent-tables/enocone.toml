@@ -1,0 +1,7 @@
+# Used by enocone's own suite (e2e/flows/run/independent-tables.flow.md): a
+# step with two independent tables, against the fixture app's /api/reports/{who}.
+project = "independent-tables-fixture"
+default_env = "local"
+
+[env.local]
+API = "http://127.0.0.1:4010/api"

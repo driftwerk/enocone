@@ -729,19 +729,19 @@
           h("figcaption", { class: "small" }, "Screenshot after this step", r.page_url ? ` · ${r.page_url}` : "")) : null), notes);
   }
 
-  // A step's tables of examples: the first with each row's result, then any linked tables.
+  // A step's tables of examples: each driving table with its rows' results, and any linked tables.
   function stepTables(s, r) {
     const tables = s.tables || [];
     if (!tables.length) return null;
-    const rowRes = new Map(((r && r.rows) || []).map((x) => [x.row, x]));
+    const rowRes = new Map(((r && r.rows) || []).map((x) => [`${x.table || 0}:${x.row}`, x]));
     // Checks describe the expected value as `= "15%"`; compare the value itself.
     const unquote = (v) => (v == null ? "" : String(v).replace(/^=\s*/, "").replace(/^"(.*)"$/, "$1"));
     const one = (t, ti) => {
-      const driving = ti === 0;
+      const driving = t.link == null;
       const ran = driving && rowRes.size > 0;
       const head = t.columns.map((c, ci) => (t.link === ci ? null : h("th", { class: c.expected ? "exp" : null, title: c.expected ? "Expected result" : null }, c.header)));
       const body = t.rows.map((row, ri) => {
-        const rr = driving ? rowRes.get(ri + 1) : null;
+        const rr = driving ? rowRes.get(`${ti}:${ri + 1}`) : null;
         const st = rr ? rr.result.status : null;
         const err = rr && rr.result.error;
         const cells = t.columns.map((c, ci) => {

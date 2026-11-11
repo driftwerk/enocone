@@ -53,9 +53,9 @@ fn find_step<'a>(flow: &'a Flow, key: &str) -> Option<&'a enocone_spec::Step> {
     flow.sections.iter().flat_map(|s| &s.steps).find(|s| s.key == key)
 }
 
-/// The index of the driving table's row with these inputs.
-fn find_row(step: &enocone_spec::Step, label: &str) -> Option<usize> {
-    (0..step.tables.first()?.rows.len()).find(|&i| step.row_label(i) == label)
+/// The (table, row) a row anchor names.
+fn find_row(step: &enocone_spec::Step, label: &str) -> Option<(usize, usize)> {
+    step.row_refs().into_iter().find(|&(t, i)| step.row_anchor(t, i) == label)
 }
 
 /// What a comment was written against: the step's sentence, or for a row, that
@@ -67,8 +67,8 @@ fn step_hash(flow: &Flow, anchor: &str) -> Option<String> {
     let text = match row {
         None => squash(&step.intent),
         Some(label) => {
-            let i = find_row(step, label)?;
-            step.tables[0].rows[i].cells.iter().map(|c| squash(c)).collect::<Vec<_>>().join("\u{1f}")
+            let (t, i) = find_row(step, label)?;
+            step.tables[t].rows[i].cells.iter().map(|c| squash(c)).collect::<Vec<_>>().join("\u{1f}")
         }
     };
     Some(Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect())
@@ -89,7 +89,7 @@ fn tables_html(step: &enocone_spec::Step, open_on_row: impl Fn(&str) -> usize) -
         }
         out.push_str("</tr></thead><tbody>");
         for (ri, r) in t.rows.iter().enumerate() {
-            let n = if ti == 0 { open_on_row(&step.row_label(ri)) } else { 0 };
+            let n = if t.link.is_none() { open_on_row(&step.row_anchor(ti, ri)) } else { 0 };
             out.push_str("<tr>");
             for (ci, cell) in r.cells.iter().enumerate() {
                 if t.link != Some(ci) {
@@ -245,11 +245,9 @@ pub async fn flow_review_page(State(app): State<App>, h: HeaderMap, Path((slug, 
                 notes = if s.notes.trim().is_empty() { String::new() } else { format!(r#"<div class="md small">{}</div>"#, md(&s.notes)) },
             ));
             options.push_str(&format!(r#"<option value="{}">Step {n}: {}</option>"#, esc(&s.key), esc(&s.intent.chars().take(60).collect::<String>())));
-            if let Some(t) = s.tables.first() {
-                for i in 0..t.rows.len() {
-                    let label = s.row_label(i);
-                    options.push_str(&format!(r#"<option value="{}#row={}">Step {n}, row: {}</option>"#, esc(&s.key), esc(&label), esc(&label)));
-                }
+            for (t, i) in s.row_refs() {
+                let label = s.row_anchor(t, i);
+                options.push_str(&format!(r#"<option value="{}#row={}">Step {n}, row: {}</option>"#, esc(&s.key), esc(&label), esc(&label)));
             }
         }
         doc.push_str("</ol>");
