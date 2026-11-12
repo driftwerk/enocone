@@ -3,7 +3,8 @@ area: Running flows
 tags: [browser, network, expect]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-12)
 ---
 
 # A browser step can check the requests the page made

@@ -3,7 +3,8 @@ area: Running flows
 tags: [http, browser, auth]
 owner: enocone
 priority: normal
-stage: draft
+stage: approved
+approved_by: Kingsley Hendrickse (2026-11-12)
 ---
 
 # An http block can send its request with the signed-in browser's cookies
