@@ -313,6 +313,8 @@ pub struct HttpSpec {
     pub method: String,
     pub url: String,
     pub auth: Option<String>,
+    /// `session: browser`: send the signed-in browser's cookies instead of a token.
+    pub browser_session: bool,
     pub headers: Vec<(String, String)>,
     pub query: Vec<(String, String)>,
     pub body: Option<HttpBody>,
@@ -349,7 +351,12 @@ impl HttpSpec {
             _ => return Err("has more than one method; use one request per block".into()),
         };
         let url = as_str(&m[method.as_str()], "the URL")?;
-        check_keys(m, &[method.as_str(), "auth", "headers", "query", "json", "form", "body", "expect", "capture", "eventually", "timeout"], "an http block")?;
+        check_keys(m, &[method.as_str(), "auth", "headers", "query", "json", "form", "body", "expect", "capture", "eventually", "timeout", "session"], "an http block")?;
+        let browser_session = match m.get("session") {
+            None => false,
+            Some(Value::String(s)) if s == "browser" => true,
+            Some(other) => return Err(format!("`session` can only be `browser` (send the signed-in browser's cookies), not {other}")),
+        };
         let body = match (m.get("json"), m.get("form"), m.get("body")) {
             (Some(j), None, None) => Some(HttpBody::Json(j.clone())),
             (None, Some(f), None) => Some(HttpBody::Form(str_pairs(f, "form")?)),
@@ -369,6 +376,7 @@ impl HttpSpec {
             method: method.to_ascii_uppercase(),
             url,
             auth: m.get("auth").map(|a| as_str(a, "auth")).transpose()?,
+            browser_session,
             headers: str_pairs(m.get("headers").unwrap_or(&Value::Null), "headers")?,
             query: str_pairs(m.get("query").unwrap_or(&Value::Null), "query")?,
             body,

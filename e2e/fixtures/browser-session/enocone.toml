@@ -1,0 +1,11 @@
+# Used by enocone's own suite (e2e/flows/run/browser-session-http.flow.md):
+# http blocks that borrow the signed-in browser's cookies, against the
+# fixture app's cookie sign-in and /api/auth/session.
+project = "browser-session-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"

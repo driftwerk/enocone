@@ -158,6 +158,9 @@ A step can also repeat over a list captured earlier: a line
 `For each: {{old_ids}}` runs its blocks once per item, as `{{item}}`, so a
 setup flow can delete every old resource before creating a fresh one.
 
+An `http` block with `session: browser` sends the signed-in browser's
+cookies, for endpoints that accept only a browser session.
+
 Captures that grant access, such as an invite link from an email, can be
 marked `secret: true` (or listed under `[mask] captures` in enocone.toml).
 They are then masked as `•••name•••` in results, reports and published runs.

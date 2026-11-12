@@ -515,6 +515,22 @@ impl Engine {
                     }
                 };
                 match block {
+                    Block::Http(spec) if spec.browser_session => {
+                        let auth = match self.browser_cookies(st, spec.auth.as_deref(), &spec.url).await {
+                            Ok(cookie) => cookie.map(|c| vec![("Cookie".to_string(), c)]).unwrap_or_default(),
+                            Err(e) => {
+                                r.error = Some(StepError { message: e, expected: None, actual: None });
+                                break;
+                            }
+                        };
+                        let out = run_http(&self.http, &spec, &auth, &self.masker, self.opts.timeout).await;
+                        r.records.push(Record::Http(out.record));
+                        self.keep(st, &mut r, out.captured, &secret_names);
+                        if let Some(e) = out.error {
+                            r.error = Some(e);
+                            break;
+                        }
+                    }
                     Block::Http(spec) => {
                         let auth = match &spec.auth {
                             Some(name) => match self.auth(name).await {
@@ -671,6 +687,35 @@ impl Engine {
         let s = driver.new_session(SessionOptions { storage_state: storage }).await?;
         st.sessions.insert(profile.to_string(), s);
         Ok(())
+    }
+
+    /// The `Cookie` header a signed-in browser would send to `url`: from the
+    /// flow's browser for that profile if it is open, else the profile's saved
+    /// sign-in; without a profile, from the flow's own browser. Cookie values
+    /// are masked from then on.
+    async fn browser_cookies(&self, st: &FlowState, profile: Option<&str>, url: &str) -> Result<Option<String>, String> {
+        let key = profile.unwrap_or("");
+        let state = match st.sessions.get(key) {
+            Some(session) => session.storage_state().await.map_err(|e| format!("reading the browser's cookies: {e}"))?,
+            None => match profile {
+                Some(name) => match self.auth(name).await {
+                    Ok(AuthState { storage: Some(s), .. }) => s,
+                    Ok(_) => return Err(format!("`session: browser` needs a browser sign-in, but auth profile `{name}` isn't one (use type = \"browser\")")),
+                    Err(e) => return Err(format!("auth profile `{name}`: {e}")),
+                },
+                None => {
+                    return Err(
+                        "`session: browser` sends the cookies of a signed-in browser, but there is none yet: add a browser step before this one, or name a browser sign-in profile with `auth:`".into(),
+                    );
+                }
+            },
+        };
+        let url = reqwest::Url::parse(url).map_err(|e| format!("`{url}` isn't a URL: {e}"))?;
+        let cookies = cookies_for(&state, &url, chrono::Utc::now().timestamp() as f64);
+        for (_, v) in &cookies {
+            self.masker.add(v);
+        }
+        Ok((!cookies.is_empty()).then(|| cookies.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")))
     }
 
     /// Resolve an auth profile once per run (logins are serialised).
@@ -893,5 +938,53 @@ fn only_if(step: &Step, vars: &Vars) -> Option<Result<String, String>> {
             Some(Ok(format!("skipped: only if {text}{saw}")))
         }
         Err(e) => Some(Err(format!("`Only if: {text}`: {e}"))),
+    }
+}
+
+/// The cookies in a browser's saved state that it would send to `url`:
+/// matching domain and path, `Secure` only over https, and not expired.
+fn cookies_for(state: &Value, url: &reqwest::Url, now: f64) -> Vec<(String, String)> {
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let path = url.path();
+    let secure = url.scheme() == "https";
+    let mut out = Vec::new();
+    for c in state["cookies"].as_array().into_iter().flatten() {
+        let s = |k: &str| c[k].as_str().unwrap_or("").to_string();
+        let domain = s("domain").to_ascii_lowercase();
+        let host_ok = match domain.strip_prefix('.') {
+            Some(d) => host == d || host.ends_with(&format!(".{d}")),
+            None => host == domain,
+        };
+        let cpath = s("path");
+        let cpath = if cpath.is_empty() { "/".to_string() } else { cpath };
+        let path_ok = path == cpath || (path.starts_with(&cpath) && (cpath.ends_with('/') || path[cpath.len()..].starts_with('/')));
+        let expires = c["expires"].as_f64().unwrap_or(-1.0);
+        let live = expires < 0.0 || expires > now;
+        if host_ok && path_ok && live && (secure || !c["secure"].as_bool().unwrap_or(false)) {
+            out.push((s("name"), s("value")));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_cookies_a_browser_would_send() {
+        let state = serde_json::json!({ "cookies": [
+            { "name": "session", "value": "abc", "domain": "app.test", "path": "/", "expires": -1, "secure": false },
+            { "name": "shared", "value": "s1", "domain": ".app.test", "path": "/", "expires": -1, "secure": false },
+            { "name": "admin", "value": "x", "domain": "app.test", "path": "/admin", "expires": -1, "secure": false },
+            { "name": "sec", "value": "y", "domain": "app.test", "path": "/", "expires": -1, "secure": true },
+            { "name": "old", "value": "z", "domain": "app.test", "path": "/", "expires": 10.0, "secure": false },
+            { "name": "other", "value": "o", "domain": "other.test", "path": "/", "expires": -1, "secure": false }
+        ] });
+        let names = |u: &str| cookies_for(&state, &reqwest::Url::parse(u).unwrap(), 1000.0).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        assert_eq!(names("http://app.test/api/x"), ["session", "shared"]);
+        assert_eq!(names("https://app.test/admin/users"), ["session", "shared", "admin", "sec"]);
+        assert_eq!(names("http://app.test/administrator"), ["session", "shared"]);
+        assert_eq!(names("http://api.app.test/"), ["shared"]);
     }
 }

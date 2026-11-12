@@ -388,6 +388,12 @@ enocone.toml does the same for every flow.
 
 ## Auth profiles
 
+Some endpoints accept only the browser's session cookie, not a token. Add
+`session: browser` to an `http` block to send the signed-in browser's
+cookies: the flow's own browser as it is at that moment, or, with `auth:`
+naming a browser profile, that profile's sign-in. The cookies are masked in
+reports.
+
 Defined in enocone.toml (`[auth.<name>]`): `header`, `bearer`, `oauth2`, or
 `browser` (signs in once through a login fragment; `as: <name>` reuses the
 session in browser steps, and `token = { url, path }` reads a bearer token
