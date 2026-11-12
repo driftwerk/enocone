@@ -161,6 +161,11 @@ setup flow can delete every old resource before creating a fresh one.
 An `http` block with `session: browser` sends the signed-in browser's
 cookies, for endpoints that accept only a browser session.
 
+A browser step can check the requests the page made with a `requests:`
+action: how many matched a URL pattern, their status, and where they went
+(`"*/api/admin/*"` with `count: 0` checks a screen never calls the admin
+API). Only method, URL and status are recorded.
+
 Captures that grant access, such as an invite link from an email, can be
 marked `secret: true` (or listed under `[mask] captures` in enocone.toml).
 They are then masked as `•••name•••` in results, reports and published runs.

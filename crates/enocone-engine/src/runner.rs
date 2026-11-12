@@ -474,6 +474,10 @@ impl Engine {
     fn exec_step_once<'a>(&'a self, st: &'a mut FlowState, step: &'a Step, prefix: &'a str) -> StepFuture<'a> {
         Box::pin(async move {
             let started = Instant::now();
+            // A `requests:` check covers what the page did during this step.
+            for s in st.sessions.values() {
+                s.clear_requests().await;
+            }
             let mut r = StepResult {
                 key: step.key.clone(),
                 status: Status::Passed,

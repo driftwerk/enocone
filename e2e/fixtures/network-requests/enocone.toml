@@ -1,0 +1,11 @@
+# Used by enocone's own suite (e2e/flows/run/network-requests.flow.md):
+# browser steps that check the requests the page made, against the fixture
+# app's /reports page.
+project = "network-requests-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+
+[env.local]
+WEB = "http://127.0.0.1:4010"

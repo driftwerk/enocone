@@ -644,6 +644,7 @@
         push("");
       } else {
         push(`${rec.ok ? "✓" : "✗"} ${rec.description}  ${fmtMs(rec.duration_ms)}`, rec.ok ? "ok" : "bad");
+        for (const line of rec.requests || []) push(`  ${line}`, "dim");
         if (rec.error) push(`  ${rec.error}`, "bad");
       }
     }

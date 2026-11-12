@@ -67,5 +67,22 @@ pub trait Session: Send + Sync {
     async fn storage_state(&self) -> anyhow::Result<Value>;
     /// Console messages since the last call (errors and warnings).
     async fn take_console(&self) -> Vec<String>;
+    /// Network requests the page made since the last `clear_requests`, oldest first.
+    async fn requests(&self) -> Vec<NetRequest> {
+        Vec::new()
+    }
+    /// Forget the requests seen so far (called when a step starts).
+    async fn clear_requests(&self) {}
     async fn close(&self) -> anyhow::Result<()>;
+}
+
+/// One network request a page made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetRequest {
+    pub method: String,
+    pub url: String,
+    /// The response status, when one arrived.
+    pub status: Option<u16>,
+    /// Finished (or failed): no longer in flight.
+    pub done: bool,
 }

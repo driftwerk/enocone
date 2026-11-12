@@ -171,6 +171,23 @@ Expect checks: `visible` (default) / `hidden`, `text` (contains),
 `exact_text`, `value`, `checked`, `enabled` / `disabled`, `count`, `url`,
 `title`, `timeout`. Expectations wait (auto-retry) up to the timeout.
 
+Check the requests the page made during the step (no bodies or headers
+are recorded; URLs are masked):
+
+```yaml
+- requests:
+    - url: "*/api/reports/*"                   # `*` = any characters
+      expect: { count: ">=1", status: 200 }    # status: a code or a list
+    - url: "*/api/admin/*"
+      expect: { count: 0 }                     # passes only if none was made
+    - url: "*/api/export*"
+      method: GET
+      expect: { urls: "*/api/export/scoped/*" }  # every match goes here
+```
+
+`count` is a number or a comparison (`">=1"`, `"<3"`); without one, at
+least one request must match. It waits for requests in flight first.
+
 ### `expect`
 
 Shorthand for a single browser expectation (same keys as above):

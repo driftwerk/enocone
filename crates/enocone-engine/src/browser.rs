@@ -3,11 +3,11 @@
 
 use std::time::{Duration, Instant};
 
-use enocone_spec::blocks::{Action, BrowserCapture, BrowserExpect, BrowserSpec, By, Locator, UiCheck, WaitSpec};
+use enocone_spec::blocks::{Action, BrowserCapture, BrowserExpect, BrowserSpec, By, Locator, RequestCheck, UiCheck, WaitSpec, glob_match};
 use enocone_spec::results::{ActionRecord, StepError};
 use serde_json::Value;
 
-use crate::driver::{Session, UiAction, UiQuery};
+use crate::driver::{NetRequest, Session, UiAction, UiQuery};
 use crate::vars::Masker;
 
 pub struct BrowserOutcome {
@@ -234,10 +234,66 @@ async fn run_capture(s: &dyn Session, name: &str, c: &BrowserCapture, timeout: D
     }
 }
 
+fn show_request(r: &NetRequest) -> String {
+    format!("{} {} {}", r.method, r.url, r.status.map(|c| c.to_string()).unwrap_or_else(|| if r.done { "failed".into() } else { "no response".into() }))
+}
+
+/// Check a `requests:` action: wait for requests in flight, then match each pattern.
+/// Returns the report lines (pattern and the requests it matched) and the outcome.
+async fn run_requests(s: &dyn Session, checks: &[RequestCheck], timeout: Duration, masker: &Masker) -> (Vec<String>, Result<(), StepError>) {
+    let deadline = Instant::now() + timeout;
+    let mut all = s.requests().await;
+    while all.iter().any(|r| !r.done) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        all = s.requests().await;
+    }
+    let mut lines = Vec::new();
+    let mut failure: Option<StepError> = None;
+    for c in checks {
+        let hits: Vec<&NetRequest> = all.iter().filter(|r| glob_match(&c.url, &r.url) && c.method.as_ref().is_none_or(|m| m.eq_ignore_ascii_case(&r.method))).collect();
+        let what = c.describe();
+        lines.push(masker.mask(&format!("{what}: {} matched", hits.len())));
+        for r in &hits {
+            lines.push(masker.mask(&format!("  {}", show_request(r))));
+        }
+        if failure.is_some() {
+            continue;
+        }
+        let (op, want) = c.count;
+        let problem = if !op.holds(hits.len(), want) {
+            Some(format!("expected {}{} matching, saw {}", op.symbol(), want, hits.len()))
+        } else if let Some(bad) = hits.iter().find(|r| !c.status.is_empty() && !r.status.is_some_and(|x| c.status.contains(&x))) {
+            Some(format!("expected status {}, but {}", c.status.iter().map(u16::to_string).collect::<Vec<_>>().join(" or "), show_request(bad)))
+        } else if let Some(u) = &c.urls
+            && let Some(bad) = hits.iter().find(|r| !glob_match(u, &r.url))
+        {
+            Some(format!("expected every request to match {u}, but {}", show_request(bad)))
+        } else {
+            None
+        };
+        if let Some(p) = problem {
+            // Show what the pattern matched, or (when nothing did) what the page requested.
+            let (label, list): (&str, Vec<&NetRequest>) = if hits.is_empty() { ("requests the page made", all.iter().collect()) } else { ("matching requests", hits.clone()) };
+            let mut msg = format!("requests {}: {p}", c.url);
+            if list.is_empty() {
+                msg.push_str("\n  the page made no requests during this step");
+            } else {
+                msg.push_str(&format!("\n  {label} ({}{}):", list.len().min(10), if list.len() > 10 { format!(" of {}", list.len()) } else { String::new() }));
+                for r in list.iter().take(10) {
+                    msg.push_str(&format!("\n    {}", show_request(r)));
+                }
+            }
+            failure = Some(StepError { message: masker.mask(&msg), expected: None, actual: None });
+        }
+    }
+    (lines, failure.map_or(Ok(()), Err))
+}
+
 pub async fn run_browser(s: &dyn Session, spec: &BrowserSpec, base: Option<&str>, t: &Timeouts, masker: &Masker) -> BrowserOutcome {
     let mut out = BrowserOutcome { records: vec![], captured: vec![], error: None, wants_screenshot: false };
     for action in &spec.actions {
         let started = Instant::now();
+        let mut seen: Vec<String> = Vec::new();
         let desc = masker.mask(&action.describe());
         let result: Result<(), StepError> = async {
             let err = |e: anyhow::Error| {
@@ -290,11 +346,16 @@ pub async fn run_browser(s: &dyn Session, spec: &BrowserSpec, base: Option<&str>
                     out.wants_screenshot = true;
                     Ok(())
                 }
+                Action::Requests(checks) => {
+                    let (lines, res) = run_requests(s, checks, t.navigation, masker).await;
+                    seen = lines;
+                    res
+                }
             }
         }
         .await;
         let ok = result.is_ok();
-        out.records.push(ActionRecord { description: desc, ok, duration_ms: started.elapsed().as_millis() as u64, error: result.as_ref().err().map(|e| masker.mask(&e.message)) });
+        out.records.push(ActionRecord { description: desc, ok, duration_ms: started.elapsed().as_millis() as u64, error: result.as_ref().err().map(|e| masker.mask(&e.message)), requests: seen });
         if let Err(e) = result {
             out.error = Some(StepError { message: masker.mask(&e.message), expected: e.expected.map(|x| masker.mask(&x)), actual: e.actual.map(|x| masker.mask(&x)) });
             break;

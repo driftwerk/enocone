@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use enocone_engine::driver::{Driver, Session, SessionOptions, UiAction, UiQuery};
+use enocone_engine::driver::{Driver, NetRequest, Session, SessionOptions, UiAction, UiQuery};
 use enocone_spec::blocks::{By, Locator};
 use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport};
+use playwright_rs::server::channel_owner::ChannelOwner;
 use playwright_rs::{LaunchOptions, Playwright};
 use serde_json::Value;
 
@@ -79,7 +80,36 @@ impl Driver for PlaywrightDriver {
             }
         })
         .await?;
-        Ok(Box::new(PwSession { ctx, page, console, timeout_ms: Mutex::new(0.0) }))
+        let requests: Requests = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&requests);
+        ctx.on_request(move |r| {
+            let sink = Arc::clone(&sink);
+            async move {
+                sink.lock().unwrap().push((r.guid().to_string(), NetRequest { method: r.method().to_string(), url: r.url().to_string(), status: None, done: false }));
+                Ok(())
+            }
+        })
+        .await?;
+        for failed in [false, true] {
+            let sink = Arc::clone(&requests);
+            let done = move |r: playwright_rs::protocol::Request| {
+                let sink = Arc::clone(&sink);
+                async move {
+                    let status = if failed { None } else { r.existing_response().map(|resp| resp.status()) };
+                    if let Some((_, n)) = sink.lock().unwrap().iter_mut().find(|(g, _)| g == r.guid()) {
+                        n.status = status;
+                        n.done = true;
+                    }
+                    Ok(())
+                }
+            };
+            if failed {
+                ctx.on_request_failed(done).await?;
+            } else {
+                ctx.on_request_finished(done).await?;
+            }
+        }
+        Ok(Box::new(PwSession { ctx, page, console, requests, timeout_ms: Mutex::new(0.0) }))
     }
 
     async fn shutdown(&self) -> anyhow::Result<()> {
@@ -88,10 +118,14 @@ impl Driver for PlaywrightDriver {
     }
 }
 
+/// Requests seen, keyed by Playwright's id for each.
+type Requests = Arc<Mutex<Vec<(String, NetRequest)>>>;
+
 struct PwSession {
     ctx: BrowserContext,
     page: Page,
     console: Arc<Mutex<Vec<String>>>,
+    requests: Requests,
     timeout_ms: Mutex<f64>,
 }
 
@@ -256,6 +290,14 @@ impl Session for PwSession {
 
     async fn take_console(&self) -> Vec<String> {
         std::mem::take(&mut *self.console.lock().unwrap())
+    }
+
+    async fn requests(&self) -> Vec<NetRequest> {
+        self.requests.lock().unwrap().iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    async fn clear_requests(&self) {
+        self.requests.lock().unwrap().clear();
     }
 
     async fn close(&self) -> anyhow::Result<()> {

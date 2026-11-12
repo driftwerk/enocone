@@ -58,6 +58,27 @@ fn page(title: &str, body: &str) -> Html<String> {
     Html(format!("<!doctype html><html lang=en><head><meta charset=utf-8><title>{title}</title></head><body><main>{body}</main></body></html>"))
 }
 
+/// Loads its data from the quarterly reports API; Export downloads from a scoped endpoint.
+/// It never calls the admin API.
+async fn reports_page() -> Html<String> {
+    page(
+        "Reports",
+        r#"<h1>Reports</h1><p id=total>Loading…</p><button id=export>Export</button><p id=exported></p>
+<script>
+fetch('/api/quarterly/q1').then(r => r.json()).then(d => { document.getElementById('total').textContent = 'Total: ' + d.total; });
+document.getElementById('export').onclick = () => fetch('/api/export/scoped/q1.csv').then(r => r.text()).then(t => { document.getElementById('exported').textContent = 'Exported ' + t.split('\n').length + ' rows'; });
+</script>"#,
+    )
+}
+
+async fn report_data(Path(id): Path<String>) -> Json<Value> {
+    Json(json!({ "id": id, "total": 42 }))
+}
+
+async fn export_scoped(Path(_file): Path<String>) -> ([(header::HeaderName, &'static str); 1], &'static str) {
+    ([(header::CONTENT_TYPE, "text/csv")], "region,total\nnorth,20\nsouth,22")
+}
+
 fn authed(h: &HeaderMap) -> bool {
     let bearer = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {TOKEN}"));
     let key = h.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(API_KEY);
@@ -90,6 +111,9 @@ pub fn app() -> Router {
     Router::new()
         .route("/", get(home))
         .route("/login", get(login_page).post(login))
+        .route("/reports", get(reports_page))
+        .route("/api/quarterly/{id}", get(report_data))
+        .route("/api/export/scoped/{file}", get(export_scoped))
         .route("/api/auth/session", get(session))
         .route("/api/auth/short-session", get(short_session))
         .route("/api/auth/short-session-once", get(short_session_once))

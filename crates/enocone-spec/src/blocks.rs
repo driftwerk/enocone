@@ -517,6 +517,129 @@ pub enum Action {
     Expect(BrowserExpect),
     Capture(Vec<(String, BrowserCapture)>),
     Screenshot,
+    Requests(Vec<RequestCheck>),
+}
+
+/// One pattern of a `requests:` action and what its matching requests must show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequestCheck {
+    /// URL pattern, `*` for any characters.
+    pub url: String,
+    pub method: Option<String>,
+    /// How many may match; `>=1` when not given.
+    pub count: (CountOp, usize),
+    /// Every matching response has one of these (when not empty).
+    pub status: Vec<u16>,
+    /// Every matching URL matches this pattern.
+    pub urls: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CountOp {
+    Eq,
+    Ge,
+    Gt,
+    Le,
+    Lt,
+}
+
+impl CountOp {
+    pub fn holds(self, n: usize, want: usize) -> bool {
+        match self {
+            CountOp::Eq => n == want,
+            CountOp::Ge => n >= want,
+            CountOp::Gt => n > want,
+            CountOp::Le => n <= want,
+            CountOp::Lt => n < want,
+        }
+    }
+    pub fn symbol(self) -> &'static str {
+        match self {
+            CountOp::Eq => "",
+            CountOp::Ge => ">=",
+            CountOp::Gt => ">",
+            CountOp::Le => "<=",
+            CountOp::Lt => "<",
+        }
+    }
+}
+
+impl RequestCheck {
+    fn from_value(v: &Value) -> Result<Self, String> {
+        let m = obj(v, "a `requests` pattern")?;
+        for k in m.keys() {
+            if !["url", "method", "expect"].contains(&k.as_str()) {
+                return Err(format!("unknown key `{k}` in a `requests` pattern (url, method, expect)"));
+            }
+        }
+        let url = as_str(m.get("url").ok_or("each `requests` pattern needs `url`")?, "url")?;
+        let method = m.get("method").map(|x| as_str(x, "method").map(|s| s.to_uppercase())).transpose()?;
+        let mut check = RequestCheck { url, method, count: (CountOp::Ge, 1), status: Vec::new(), urls: None };
+        if let Some(e) = m.get("expect") {
+            let e = obj(e, "`expect`")?;
+            for (k, val) in e {
+                match k.as_str() {
+                    "count" => check.count = parse_count(val)?,
+                    "status" => {
+                        let one = |x: &Value| x.as_u64().filter(|n| (100..600).contains(n)).map(|n| n as u16).ok_or_else(|| format!("`status` needs a status code like 200, not {x}"));
+                        check.status = match val {
+                            Value::Array(a) => a.iter().map(one).collect::<Result<_, _>>()?,
+                            x => vec![one(x)?],
+                        };
+                    }
+                    "urls" => check.urls = Some(as_str(val, "urls")?),
+                    other => return Err(format!("unknown check `{other}` for requests (count, status, urls)")),
+                }
+            }
+        }
+        Ok(check)
+    }
+
+    pub fn describe(&self) -> String {
+        let mut s = format!("{}{}", self.method.as_deref().map(|m| format!("{m} ")).unwrap_or_default(), self.url);
+        let mut parts = vec![format!("count {}{}", self.count.0.symbol(), self.count.1)];
+        if !self.status.is_empty() {
+            parts.push(format!("status {}", self.status.iter().map(u16::to_string).collect::<Vec<_>>().join(" or ")));
+        }
+        if let Some(u) = &self.urls {
+            parts.push(format!("all to {u}"));
+        }
+        s.push_str(&format!(" ({})", parts.join(", ")));
+        s
+    }
+}
+
+fn parse_count(v: &Value) -> Result<(CountOp, usize), String> {
+    if let Some(n) = v.as_u64() {
+        return Ok((CountOp::Eq, n as usize));
+    }
+    let bad = || format!("`count` needs a number or a comparison like \">=1\" or \"<3\", not {v}");
+    let s = v.as_str().ok_or_else(bad)?.trim();
+    let (op, rest) = [(">=", CountOp::Ge), ("<=", CountOp::Le), (">", CountOp::Gt), ("<", CountOp::Lt), ("==", CountOp::Eq), ("=", CountOp::Eq)]
+        .iter()
+        .find_map(|(p, op)| s.strip_prefix(p).map(|r| (*op, r)))
+        .unwrap_or((CountOp::Eq, s));
+    Ok((op, rest.trim().parse().map_err(|_| bad())?))
+}
+
+/// Does `text` match `pattern`, where `*` stands for any characters?
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !text.starts_with(first) || text.len() < first.len() + last.len() || !text.ends_with(last) {
+        return false;
+    }
+    let mut rest = &text[first.len()..text.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -870,7 +993,7 @@ impl BrowserExpect {
     }
 }
 
-const ACTIONS: &[&str] = &["goto", "click", "dblclick", "hover", "fill", "check", "uncheck", "select", "press", "upload", "wait", "expect", "capture", "screenshot"];
+const ACTIONS: &[&str] = &["goto", "click", "dblclick", "hover", "fill", "check", "uncheck", "select", "press", "upload", "wait", "expect", "capture", "screenshot", "requests"];
 
 impl BrowserSpec {
     /// Accepts a list of actions, `{ as, steps: [...] }`, or a single action map.
@@ -956,6 +1079,13 @@ impl Action {
             "expect" => Action::Expect(BrowserExpect::from_value(val)?),
             "capture" => Action::Capture(obj(val, "capture")?.iter().map(|(name, spec)| Ok((name.clone(), BrowserCapture::from_value(spec)?))).collect::<Result<_, String>>()?),
             "screenshot" => Action::Screenshot,
+            "requests" => {
+                let list = match val {
+                    Value::Array(a) if !a.is_empty() => a.iter().map(RequestCheck::from_value).collect::<Result<_, _>>()?,
+                    _ => return Err("`requests` needs a list of patterns, like - url: \"*/api/*\"".into()),
+                };
+                Action::Requests(list)
+            }
             other => return Err(format!("unknown action `{other}` (known: {})", ACTIONS.join(", "))),
         })
     }
@@ -980,6 +1110,7 @@ impl Action {
             Action::Expect(e) => format!("check {}", e.describe()),
             Action::Capture(c) => format!("keep {}", c.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
             Action::Screenshot => "screenshot".into(),
+            Action::Requests(r) => format!("check requests {}", r.iter().map(RequestCheck::describe).collect::<Vec<_>>().join("; ")),
         }
     }
 }
@@ -1294,5 +1425,22 @@ impl EmailSpec {
                 .collect::<Result<_, String>>()?,
         };
         Ok(EmailSpec { to, subject: m.get("subject").map(|s| as_str(s, "subject")).transpose()?, within: m.get("within").map(parse_duration).transpose()?, expect, capture })
+    }
+}
+
+#[cfg(test)]
+mod request_check_tests {
+    use super::*;
+
+    #[test]
+    fn globs_and_counts() {
+        assert!(glob_match("*/api/reports/*", "http://x/api/reports/q1"));
+        assert!(!glob_match("*/api/admin/*", "http://x/api/reports/q1"));
+        assert!(glob_match("http://x/a", "http://x/a"));
+        assert!(!glob_match("a*a", "a"));
+        assert_eq!(parse_count(&Value::from(">=1")).unwrap(), (CountOp::Ge, 1));
+        assert_eq!(parse_count(&Value::from(0)).unwrap(), (CountOp::Eq, 0));
+        assert_eq!(parse_count(&Value::from("<3")).unwrap(), (CountOp::Lt, 3));
+        assert!(parse_count(&Value::from("lots")).is_err());
     }
 }
