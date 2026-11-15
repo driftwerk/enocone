@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-cli"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-driver-playwright"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-engine"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-fixture"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "axum",
  "jsonwebtoken",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-hub"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-mcp"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-report"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "enocone-spec"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "pulldown-cmark",
  "regex",
