@@ -2,6 +2,7 @@
 //! cleanup always, retries marked as flaky, evidence on every step.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -17,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::browser::{Timeouts, run_browser};
-use crate::config::{AuthProfile, Project, Screenshots};
+use crate::config::{AuthProfile, BrowserToken, Project, Screenshots};
 use crate::driver::{Driver, Session, SessionOptions};
 use crate::email::{Mailbox, Provider, run_email};
 use crate::exec::run_exec;
@@ -81,8 +82,18 @@ struct AuthState {
     fetched: tokio::time::Instant,
 }
 
-/// One profile's sign-in: none yet, the last good one, or why signing in failed.
-type AuthSlot = Arc<Mutex<Option<Result<AuthState, String>>>>;
+/// How long a failed token refresh answers for its profile before the next
+/// use tries again: long enough for the uses queued behind it to share it.
+const REFRESH_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// One profile's sign-in, and its latest failed refresh.
+#[derive(Default)]
+struct AuthSlot {
+    /// None yet, the last good one, or why signing in failed.
+    signed_in: Option<Result<AuthState, String>>,
+    /// When the latest refresh failed and why, cleared by a good refresh.
+    refresh_failed: Option<(tokio::time::Instant, String)>,
+}
 
 pub struct Engine {
     pub project: Project,
@@ -91,7 +102,7 @@ pub struct Engine {
     http: reqwest::Client,
     pub masker: Masker,
     env_vars: serde_json::Map<String, Value>,
-    auth: std::sync::Mutex<HashMap<String, AuthSlot>>,
+    auth: std::sync::Mutex<HashMap<String, Arc<Mutex<AuthSlot>>>>,
     events: EventSink,
 }
 
@@ -102,6 +113,14 @@ struct FlowState {
     attempt: u32,
     /// Only emails sent after this count.
     started: chrono::DateTime<chrono::Utc>,
+}
+
+impl FlowState {
+    async fn close_sessions(&mut self) {
+        for (_, s) in self.sessions.drain() {
+            let _ = s.close().await;
+        }
+    }
 }
 
 type StepFuture<'a> = Pin<Box<dyn Future<Output = StepResult> + Send + 'a>>;
@@ -198,16 +217,16 @@ impl Engine {
             let me = Arc::clone(self);
             let sem = Arc::clone(&sem);
             handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire_owned().await.expect("semaphore");
+                let _permit = sem.acquire_owned().await?;
                 (me.events)(Event::FlowStarted { id: flow.id.clone(), title: flow.title.clone() });
                 let r = me.run_flow(flow).await;
                 (me.events)(Event::FlowFinished(Box::new(r.clone())));
-                r
+                anyhow::Ok(r)
             }));
         }
         let mut results = Vec::new();
         for h in handles {
-            match h.await {
+            match h.await.map_err(anyhow::Error::from).and_then(|r| r) {
                 Ok(r) => results.push(r),
                 Err(e) => (self.events)(Event::Log(format!("internal error: {e}"))),
             }
@@ -348,9 +367,7 @@ impl Engine {
                 }
             }
         }
-        for (_, s) in st.sessions.drain() {
-            let _ = s.close().await;
-        }
+        st.close_sessions().await;
         let status = if steps.iter().any(|s| s.status == Status::Failed) {
             Status::Failed
         } else if steps.iter().any(|s| s.status == Status::Pending) {
@@ -559,13 +576,15 @@ impl Engine {
                     }
                     Block::Browser(spec) => {
                         let key = spec.as_profile.clone().unwrap_or_default();
-                        if let Err(e) = self.ensure_session(st, &key).await {
-                            r.error = Some(StepError { message: self.masker.mask(&e.to_string()), expected: None, actual: None });
-                            break;
-                        }
-                        let session = st.sessions.get(&key).expect("session");
+                        let session = match self.ensure_session(st, &key).await {
+                            Ok(session) => session,
+                            Err(e) => {
+                                r.error = Some(StepError { message: self.masker.mask(&e.to_string()), expected: None, actual: None });
+                                break;
+                            }
+                        };
                         let t = Timeouts { action: self.opts.timeout, navigation: self.opts.navigation_timeout };
-                        let out = run_browser(session.as_ref(), &spec, self.base_url().as_deref(), &t, &self.masker).await;
+                        let out = run_browser(session, &spec, self.base_url().as_deref(), &t, &self.masker).await;
                         used_browser = Some(key);
                         wants_shot |= out.wants_screenshot;
                         r.records.extend(out.records.into_iter().map(Record::Action));
@@ -677,10 +696,16 @@ impl Engine {
         })
     }
 
-    async fn ensure_session(&self, st: &mut FlowState, profile: &str) -> anyhow::Result<()> {
-        if st.sessions.contains_key(profile) {
-            return Ok(());
-        }
+    /// The flow's browser for `profile`, opened (and signed in) on first use.
+    async fn ensure_session<'s>(&self, st: &'s mut FlowState, profile: &str) -> anyhow::Result<&'s dyn Session> {
+        let session = match st.sessions.entry(profile.to_string()) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(self.new_flow_session(profile).await?),
+        };
+        Ok(&**session)
+    }
+
+    async fn new_flow_session(&self, profile: &str) -> anyhow::Result<Box<dyn Session>> {
         let driver = self.driver.as_ref().ok_or_else(|| anyhow!("this step needs a browser, but no browser driver is running"))?;
         let storage = if profile.is_empty() {
             None
@@ -691,9 +716,7 @@ impl Engine {
             }
             a.storage
         };
-        let s = driver.new_session(SessionOptions { storage_state: storage }).await?;
-        st.sessions.insert(profile.to_string(), s);
-        Ok(())
+        driver.new_session(SessionOptions { storage_state: storage }).await
     }
 
     /// The `Cookie` header a signed-in browser would send to `url`: from the
@@ -727,31 +750,44 @@ impl Engine {
 
     /// Resolve an auth profile once per run. Uses of one profile wait for its
     /// single sign-in or refresh; other profiles don't wait for it. A failed
-    /// refresh keeps the last good sign-in, so the next use tries again.
+    /// refresh keeps the last good sign-in, and its failure answers every use
+    /// for `REFRESH_RETRY_AFTER`, so the uses queued behind it share it.
     async fn auth(&self, name: &str) -> Result<AuthState, String> {
         let slot = self.auth_slot(name);
         let mut slot = slot.lock().await;
-        match slot.as_ref() {
-            Some(Ok(state)) if self.token_is_stale(name, state) => {
-                let state = state.clone();
-                (self.events)(Event::Log(format!("refreshing the token for `{name}`")));
-                let fresh = self.refresh_token(name, state).await.map_err(|e| self.masker.mask(&format!("{e:#}")))?;
-                *slot = Some(Ok(fresh.clone()));
-                Ok(fresh)
-            }
-            Some(r) => r.clone(),
+        let stale = match &slot.signed_in {
+            Some(Ok(state)) if self.token_is_stale(name, state) => state.clone(),
+            Some(r) => return r.clone(),
             None => {
                 if matches!(self.project.config.auth.get(name), Some(AuthProfile::Browser { .. } | AuthProfile::Oauth2 { .. })) {
                     (self.events)(Event::Log(format!("signing in as `{name}`")));
                 }
                 let r = self.resolve_auth(name).await.map_err(|e| self.masker.mask(&format!("{e:#}")));
-                *slot = Some(r.clone());
-                r
+                slot.signed_in = Some(r.clone());
+                return r;
+            }
+        };
+        if let Some((at, why)) = &slot.refresh_failed
+            && at.elapsed() < REFRESH_RETRY_AFTER
+        {
+            return Err(why.clone());
+        }
+        (self.events)(Event::Log(format!("refreshing the token for `{name}`")));
+        match self.refresh_token(name, stale).await {
+            Ok(fresh) => {
+                slot.signed_in = Some(Ok(fresh.clone()));
+                slot.refresh_failed = None;
+                Ok(fresh)
+            }
+            Err(e) => {
+                let why = self.masker.mask(&format!("{e:#}"));
+                slot.refresh_failed = Some((tokio::time::Instant::now(), why.clone()));
+                Err(why)
             }
         }
     }
 
-    fn auth_slot(&self, name: &str) -> AuthSlot {
+    fn auth_slot(&self, name: &str) -> Arc<Mutex<AuthSlot>> {
         let mut slots = self.auth.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Arc::clone(slots.entry(name.to_string()).or_default())
     }
@@ -784,9 +820,8 @@ impl Engine {
         let driver = self.driver.as_ref().ok_or_else(|| anyhow!("refreshing needs a browser, but no browser driver is running"))?;
         let session = driver.new_session(SessionOptions { storage_state: state.storage.clone() }).await.map_err(fail)?;
         let result = async {
-            // A same-origin fetch needs only a document on the token's origin, not a loaded page.
-            let origin = reqwest::Url::parse(&url).map(|u| u.origin().ascii_serialization()).unwrap_or_else(|_| url.clone());
-            session.goto_committed(&origin, self.opts.navigation_timeout).await?;
+            // The fetch needs only a committed document on the token's own URL, not a loaded page.
+            session.goto_committed(&url, self.opts.navigation_timeout).await?;
             let tok = self.read_token(session.as_ref(), &url, &t.path).await?;
             let storage = session.storage_state().await.ok().or(state.storage.clone());
             anyhow::Ok(AuthState { headers: vec![("Authorization".to_string(), format!("Bearer {tok}"))], storage, fetched: tokio::time::Instant::now() })
@@ -846,48 +881,39 @@ impl Engine {
             AuthProfile::Browser { login, params, token } => {
                 let driver = self.driver.as_ref().ok_or_else(|| anyhow!("needs a browser to sign in, but no browser driver is running"))?;
                 let fragment = self.project.load_fragment(&login)?;
+                let params = params.iter().map(|(k, v)| Ok((k.clone(), self.render_str(v)?))).collect::<anyhow::Result<Vec<_>>>()?;
                 let session = driver.new_session(SessionOptions::default()).await?;
                 let mut st = FlowState { vars: self.vars(0), sessions: HashMap::new(), flow_id: format!("auth-{name}"), attempt: 1, started: chrono::Utc::now() };
-                for (k, v) in &params {
-                    let v = self.render_str(v)?;
-                    st.vars.set(k, Value::String(v));
+                for (k, v) in params {
+                    st.vars.set(&k, Value::String(v));
                 }
                 st.sessions.insert(String::new(), session);
-                let mut failure = None;
-                for step in fragment.steps() {
-                    let r = self.exec_step(&mut st, step, "").await;
-                    if r.status == Status::Failed {
-                        failure = Some(format!(
-                            "login step \"{}\" failed: {}{}",
-                            step.intent,
-                            r.error.map(|e| e.message).unwrap_or_default(),
-                            r.screenshot.map(|s| format!(" (screenshot: {s})")).unwrap_or_default()
-                        ));
-                        break;
-                    }
-                }
-                let session = st.sessions.remove("").expect("login session");
-                if let Some(f) = failure {
-                    let _ = session.close().await;
-                    bail!(f);
-                }
-                let signed_in = async {
-                    let storage = session.storage_state().await?;
-                    let headers = match &token {
-                        Some(t) => {
-                            let url = self.render_str(&t.url)?;
-                            let tok = self.read_token(session.as_ref(), &url, &t.path).await?;
-                            vec![("Authorization".to_string(), format!("Bearer {tok}"))]
-                        }
-                        None => vec![],
-                    };
-                    anyhow::Ok(AuthState { headers, storage: Some(storage), fetched: tokio::time::Instant::now() })
-                }
-                .await;
-                let _ = session.close().await;
+                let signed_in = self.sign_in(&mut st, &fragment, token.as_ref()).await;
+                st.close_sessions().await;
                 signed_in
             }
         }
+    }
+
+    /// Run a login fragment in `st`'s default browser, then read what it signed in.
+    async fn sign_in(&self, st: &mut FlowState, fragment: &Flow, token: Option<&BrowserToken>) -> anyhow::Result<AuthState> {
+        for step in fragment.steps() {
+            let r = self.exec_step(st, step, "").await;
+            if r.status == Status::Failed {
+                bail!("login step \"{}\" failed: {}{}", step.intent, r.error.map(|e| e.message).unwrap_or_default(), r.screenshot.map(|s| format!(" (screenshot: {s})")).unwrap_or_default());
+            }
+        }
+        let session = st.sessions.get("").ok_or_else(|| anyhow!("the login fragment's browser session is gone"))?;
+        let storage = session.storage_state().await?;
+        let headers = match token {
+            Some(t) => {
+                let url = self.render_str(&t.url)?;
+                let tok = self.read_token(session.as_ref(), &url, &t.path).await?;
+                vec![("Authorization".to_string(), format!("Bearer {tok}"))]
+            }
+            None => vec![],
+        };
+        Ok(AuthState { headers, storage: Some(storage), fetched: tokio::time::Instant::now() })
     }
 
     pub async fn shutdown(&self) {
@@ -1025,6 +1051,7 @@ mod auth_tests {
 
     use async_trait::async_trait;
     use enocone_spec::blocks::Locator;
+    use tempfile::TempDir;
     use tokio::sync::Notify;
 
     use super::*;
@@ -1034,15 +1061,37 @@ mod auth_tests {
 
     /// A browser whose session fetches answer as `reply` says, by call number.
     struct FakeBrowser {
-        sessions: AtomicUsize,
+        opened: AtomicUsize,
+        closed: StdMutex<Vec<usize>>,
         evals: AtomicUsize,
         navigations: StdMutex<Vec<String>>,
+        login_fails: bool,
         reply: Box<dyn Fn(usize) -> Reply + Send + Sync>,
+    }
+
+    impl FakeBrowser {
+        fn opened(&self) -> usize {
+            self.opened.load(Ordering::SeqCst)
+        }
+
+        fn evals(&self) -> usize {
+            self.evals.load(Ordering::SeqCst)
+        }
+
+        /// Every session opened so far was closed, and none more than once.
+        fn assert_each_closed_once(&self) {
+            let mut closed = self.closed.lock().expect("closed").clone();
+            closed.sort_unstable();
+            assert_eq!(closed, (0..self.opened()).collect::<Vec<_>>(), "sessions closed, by id");
+        }
     }
 
     struct FakeDriver(Arc<FakeBrowser>);
 
-    struct FakeSession(Arc<FakeBrowser>);
+    struct FakeSession {
+        id: usize,
+        browser: Arc<FakeBrowser>,
+    }
 
     #[async_trait]
     impl Driver for FakeDriver {
@@ -1050,8 +1099,8 @@ mod auth_tests {
             "fake".into()
         }
         async fn new_session(&self, _: SessionOptions) -> anyhow::Result<Box<dyn Session>> {
-            self.0.sessions.fetch_add(1, Ordering::SeqCst);
-            Ok(Box::new(FakeSession(Arc::clone(&self.0))))
+            let id = self.0.opened.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeSession { id, browser: Arc::clone(&self.0) }))
         }
         async fn shutdown(&self) -> anyhow::Result<()> {
             Ok(())
@@ -1061,11 +1110,14 @@ mod auth_tests {
     #[async_trait]
     impl Session for FakeSession {
         async fn goto(&self, url: &str, _: Duration) -> anyhow::Result<()> {
-            self.0.navigations.lock().expect("navigations").push(format!("load {url}"));
+            self.browser.navigations.lock().expect("navigations").push(format!("load {url}"));
+            if self.browser.login_fails {
+                bail!("the sign-in page is down");
+            }
             Ok(())
         }
         async fn goto_committed(&self, url: &str, _: Duration) -> anyhow::Result<()> {
-            self.0.navigations.lock().expect("navigations").push(format!("commit {url}"));
+            self.browser.navigations.lock().expect("navigations").push(format!("commit {url}"));
             Ok(())
         }
         async fn act(&self, _: &Locator, _: UiAction, _: Duration) -> anyhow::Result<()> {
@@ -1090,8 +1142,8 @@ mod auth_tests {
             bail!("not used")
         }
         async fn eval(&self, _: &str) -> anyhow::Result<Value> {
-            let n = self.0.evals.fetch_add(1, Ordering::SeqCst);
-            (self.0.reply)(n).await
+            let n = self.browser.evals.fetch_add(1, Ordering::SeqCst);
+            (self.browser.reply)(n).await
         }
         async fn storage_state(&self) -> anyhow::Result<Value> {
             Ok(serde_json::json!({ "cookies": [], "origins": [] }))
@@ -1100,6 +1152,7 @@ mod auth_tests {
             vec![]
         }
         async fn close(&self) -> anyhow::Result<()> {
+            self.browser.closed.lock().expect("closed").push(self.id);
             Ok(())
         }
     }
@@ -1109,19 +1162,39 @@ mod auth_tests {
         Box::pin(async move { Ok(body) })
     }
 
+    fn stalled(_: usize) -> Reply {
+        Box::pin(async { Err(anyhow!("the page stalled")) })
+    }
+
+    /// The engine under test, with the project folder it reads its login from.
+    struct Fixture {
+        engine: Arc<Engine>,
+        browser: Arc<FakeBrowser>,
+        _root: TempDir,
+    }
+
+    #[derive(Default)]
+    struct Setup {
+        refresh: &'static str,
+        params: &'static str,
+        login_fails: bool,
+    }
+
     /// An engine whose `web` profile signs in through the fake browser and
     /// refreshes its token when it is `refresh` old; `key` is a fixed header.
-    fn engine(refresh: &str, reply: impl Fn(usize) -> Reply + Send + Sync + 'static) -> (Arc<Engine>, Arc<FakeBrowser>) {
-        let root = std::env::temp_dir().join(format!("enocone-auth-test-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(root.join("fragments")).expect("fragments folder");
-        std::fs::write(root.join("fragments/sign-in.flow.md"), "# Sign in\n\n## When\n\n1. **Open the sign-in page**\n   ```browser\n   - goto: http://app.test/login\n   ```\n")
+    fn fixture(setup: Setup, reply: impl Fn(usize) -> Reply + Send + Sync + 'static) -> Fixture {
+        let root = TempDir::new().expect("project folder");
+        std::fs::create_dir_all(root.path().join("fragments")).expect("fragments folder");
+        std::fs::write(root.path().join("fragments/sign-in.flow.md"), "# Sign in\n\n## When\n\n1. **Open the sign-in page**\n   ```browser\n   - goto: http://app.test/login\n   ```\n")
             .expect("login fragment");
+        let Setup { refresh, params, login_fails } = setup;
         let config = toml::from_str(&format!(
             r#"
             project = "auth-test"
             [auth.web]
             type = "browser"
             login = "sign-in"
+            {params}
             token = {{ url = "http://app.test/api/session", path = "$.accessToken", refresh = "{refresh}" }}
             [auth.key]
             type = "header"
@@ -1130,70 +1203,111 @@ mod auth_tests {
             "#
         ))
         .expect("config");
-        let project = Project { root: root.clone(), config };
-        let opts = RunOptions::from_project(&project, "local".into(), root.join("out")).expect("options");
-        let browser = Arc::new(FakeBrowser { sessions: AtomicUsize::new(0), evals: AtomicUsize::new(0), navigations: StdMutex::new(vec![]), reply: Box::new(reply) });
+        let project = Project { root: root.path().to_path_buf(), config };
+        let opts = RunOptions::from_project(&project, "local".into(), root.path().join("out")).expect("options");
+        let browser =
+            Arc::new(FakeBrowser { opened: AtomicUsize::new(0), closed: StdMutex::new(vec![]), evals: AtomicUsize::new(0), navigations: StdMutex::new(vec![]), login_fails, reply: Box::new(reply) });
         let driver: Arc<dyn Driver> = Arc::new(FakeDriver(Arc::clone(&browser)));
         let engine = Engine::new(project, opts, Some(driver), Arc::new(|_| {})).expect("engine");
-        (Arc::new(engine), browser)
+        Fixture { engine: Arc::new(engine), browser, _root: root }
+    }
+
+    fn refreshing(refresh: &'static str, reply: impl Fn(usize) -> Reply + Send + Sync + 'static) -> Fixture {
+        fixture(Setup { refresh, ..Setup::default() }, reply)
     }
 
     fn bearer(r: &Result<AuthState, String>) -> Option<String> {
         r.as_ref().ok().and_then(|a| a.headers.iter().find(|(k, _)| k == "Authorization").map(|(_, v)| v.clone()))
     }
 
-    /// The fetch answers `n` after signalling `entered` and waiting for `gate`.
-    fn gated(n: usize, entered: &Arc<Notify>, gate: &Arc<Notify>) -> impl Fn(usize) -> Reply + Send + Sync + 'static {
+    /// Fetch `n` signals `entered`, waits for `gate`, then answers as `answer` says.
+    fn gated(n: usize, entered: &Arc<Notify>, gate: &Arc<Notify>, answer: fn(usize) -> Reply) -> impl Fn(usize) -> Reply + Send + Sync + 'static {
         let (entered, gate) = (Arc::clone(entered), Arc::clone(gate));
         move |i| {
             let (entered, gate) = (Arc::clone(&entered), Arc::clone(&gate));
             Box::pin(async move {
-                if i == n {
-                    entered.notify_one();
-                    gate.notified().await;
+                if i != n {
+                    return token(i).await;
                 }
-                token(i).await
+                entered.notify_one();
+                gate.notified().await;
+                answer(i).await
             })
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_failed_refresh_is_retried_on_the_next_use() {
-        let (engine, browser) = engine("0s", |n| match n {
-            1 => Box::pin(async { Err(anyhow!("the page stalled")) }),
-            n => token(n),
-        });
-        assert_eq!(bearer(&engine.auth("web").await).as_deref(), Some("Bearer t0"));
-        let failed = engine.auth("web").await.err().expect("the refresh fails");
+    async fn a_failed_refresh_answers_until_its_cooldown_then_is_retried() {
+        let f = refreshing("0s", |n| if n == 1 { stalled(n) } else { token(n) });
+        assert_eq!(bearer(&f.engine.auth("web").await).as_deref(), Some("Bearer t0"));
+        let failed = f.engine.auth("web").await.err().expect("the refresh fails");
         assert!(failed.contains("refreshing the token for `web`") && failed.contains("the page stalled"), "{failed}");
-        assert_eq!(bearer(&engine.auth("web").await).as_deref(), Some("Bearer t2"));
-        assert_eq!(browser.sessions.load(Ordering::SeqCst), 3);
+        tokio::time::advance(REFRESH_RETRY_AFTER - Duration::from_millis(1)).await;
+        assert_eq!(f.engine.auth("web").await.err().as_deref(), Some(failed.as_str()), "the failure answers within its cooldown");
+        assert_eq!((f.browser.opened(), f.browser.evals()), (2, 2), "no refresh was tried within the cooldown");
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(bearer(&f.engine.auth("web").await).as_deref(), Some("Bearer t2"));
+        assert_eq!(f.browser.opened(), 3);
+        f.browser.assert_each_closed_once();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn uses_queued_behind_a_failing_refresh_share_its_failure() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("60s", gated(1, &entered, &gate, stalled));
+        f.engine.auth("web").await.expect("signs in");
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let all = async {
+            tokio::join!(f.engine.auth("web"), f.engine.auth("web"), f.engine.auth("web"), async {
+                entered.notified().await;
+                gate.notify_one();
+            })
+        };
+        let (a, b, c, ()) = tokio::time::timeout(Duration::from_secs(60), all).await.expect("the queued uses are answered");
+        let failed = a.err().expect("the refresh fails");
+        assert!(failed.contains("the page stalled"), "{failed}");
+        assert_eq!(b.err().as_deref(), Some(failed.as_str()));
+        assert_eq!(c.err().as_deref(), Some(failed.as_str()));
+        assert_eq!((f.browser.opened(), f.browser.evals()), (2, 2), "one sign-in and one refresh");
+        f.browser.assert_each_closed_once();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_good_refresh_clears_an_earlier_failure() {
+        let f = refreshing("0s", |n| if n == 1 { stalled(n) } else { token(n) });
+        f.engine.auth("web").await.expect("signs in");
+        f.engine.auth("web").await.err().expect("the refresh fails");
+        tokio::time::advance(REFRESH_RETRY_AFTER).await;
+        assert_eq!(bearer(&f.engine.auth("web").await).as_deref(), Some("Bearer t2"));
+        assert_eq!(bearer(&f.engine.auth("web").await).as_deref(), Some("Bearer t3"), "the next stale use refreshes at once");
+        f.browser.assert_each_closed_once();
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_slow_refresh_does_not_hold_up_other_profiles() {
         let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-        let (engine, _) = engine("0s", gated(1, &entered, &gate));
-        engine.auth("web").await.expect("signs in");
-        let (slow, other) = tokio::join!(engine.auth("web"), async {
+        let f = refreshing("0s", gated(1, &entered, &gate, token));
+        f.engine.auth("web").await.expect("signs in");
+        let (slow, other) = tokio::join!(f.engine.auth("web"), async {
             entered.notified().await;
-            let other = tokio::time::timeout(Duration::from_secs(1), engine.auth("key")).await;
+            let other = tokio::time::timeout(Duration::from_secs(1), f.engine.auth("key")).await;
             gate.notify_one();
             other
         });
         let other = other.expect("another profile is not held up by the refresh").expect("header profile");
         assert_eq!(other.headers, [("X-Key".to_string(), "k".to_string())]);
         assert_eq!(bearer(&slow).as_deref(), Some("Bearer t1"));
+        f.browser.assert_each_closed_once();
     }
 
     #[tokio::test(start_paused = true)]
     async fn concurrent_uses_of_a_stale_profile_share_one_refresh() {
         let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-        let (engine, browser) = engine("60s", gated(1, &entered, &gate));
-        engine.auth("web").await.expect("signs in");
+        let f = refreshing("60s", gated(1, &entered, &gate, token));
+        f.engine.auth("web").await.expect("signs in");
         tokio::time::advance(Duration::from_secs(61)).await;
         let both = async {
-            tokio::join!(engine.auth("web"), engine.auth("web"), async {
+            tokio::join!(f.engine.auth("web"), f.engine.auth("web"), async {
                 entered.notified().await;
                 gate.notify_one();
             })
@@ -1201,20 +1315,46 @@ mod auth_tests {
         let (first, second, ()) = tokio::time::timeout(Duration::from_secs(60), both).await.expect("the stale token is refreshed");
         assert_eq!(bearer(&first).as_deref(), Some("Bearer t1"));
         assert_eq!(bearer(&second).as_deref(), Some("Bearer t1"));
-        assert_eq!(browser.sessions.load(Ordering::SeqCst), 2);
+        assert_eq!(f.browser.opened(), 2);
+        f.browser.assert_each_closed_once();
     }
 
     #[tokio::test(start_paused = true)]
-    async fn the_session_fetch_gives_up_after_the_step_timeout() {
-        let (engine, browser) = engine("0s", |n| match n {
-            0 => token(0),
-            _ => Box::pin(std::future::pending()),
-        });
-        engine.auth("web").await.expect("signs in");
+    async fn the_refresh_commits_the_token_url_and_gives_up_after_the_step_timeout() {
+        let f = refreshing("0s", |n| if n == 0 { token(n) } else { Box::pin(std::future::pending()) });
+        f.engine.auth("web").await.expect("signs in");
         let started = tokio::time::Instant::now();
-        let failed = tokio::time::timeout(Duration::from_secs(600), engine.auth("web")).await.expect("bounded").err().expect("times out");
+        let failed = tokio::time::timeout(Duration::from_secs(600), f.engine.auth("web")).await.expect("bounded").err().expect("times out");
         assert!(failed.contains("gave no answer within 10s"), "{failed}");
         assert_eq!(started.elapsed(), Duration::from_secs(10));
-        assert_eq!(browser.navigations.lock().expect("navigations").as_slice(), ["load http://app.test/login", "commit http://app.test"]);
+        assert_eq!(f.browser.navigations.lock().expect("navigations").as_slice(), ["load http://app.test/login", "commit http://app.test/api/session"]);
+        f.browser.assert_each_closed_once();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_login_step_closes_its_browser() {
+        let f = fixture(Setup { refresh: "0s", login_fails: true, ..Setup::default() }, token);
+        let failed = f.engine.auth("web").await.err().expect("the login fails");
+        assert!(failed.contains("login step \"Open the sign-in page\" failed") && failed.contains("the sign-in page is down"), "{failed}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_token_read_at_sign_in_closes_its_browser() {
+        let f = refreshing("0s", stalled);
+        let failed = f.engine.auth("web").await.err().expect("the token read fails");
+        assert!(failed.contains("the page stalled"), "{failed}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_param_that_does_not_render_opens_no_browser() {
+        let f = fixture(Setup { refresh: "0s", params: r#"params = { user = "{{nope}}" }"#, ..Setup::default() }, token);
+        let failed = f.engine.auth("web").await.err().expect("the param does not render");
+        assert!(failed.contains("unknown variable `nope`"), "{failed}");
+        assert_eq!(f.browser.opened(), 0);
+        f.browser.assert_each_closed_once();
     }
 }

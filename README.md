@@ -119,7 +119,8 @@ token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken", refresh 
 
 `refresh` re-reads a short-lived access token from the saved browser session
 when it gets that old, so long suites keep working. A refresh that fails
-fails only the step that needed it: the next use tries again.
+keeps the saved sign-in and fails the steps that need the token for the
+next 30 seconds, then the next use tries again.
 
 ## Tables of examples
 
