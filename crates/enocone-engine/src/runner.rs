@@ -1,7 +1,8 @@
 //! Run flows: one isolated context per flow, steps in document order,
 //! cleanup always, retries marked as flaky, evidence on every step.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -9,15 +10,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
-use enocone_spec::blocks::{Block, parse_duration_str};
+use enocone_spec::blocks::{Block, UseSpec, parse_duration_str};
 use enocone_spec::results::*;
 use enocone_spec::template::{Resolver, render};
 use enocone_spec::{BlockKind, Flow, SectionKind, Step};
 use serde_json::Value;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 
+use crate::auth::{AuthState, Need, Next, ProfileAuth, SIGN_IN_STEPS, outcome_of};
 use crate::browser::{Timeouts, run_browser};
-use crate::config::{AuthProfile, Project, Screenshots};
+use crate::config::{AuthProfile, BrowserToken, Project, Screenshots};
 use crate::driver::{Driver, Session, SessionOptions};
 use crate::email::{Mailbox, Provider, run_email};
 use crate::exec::run_exec;
@@ -73,14 +75,6 @@ pub enum Event {
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
-#[derive(Clone)]
-struct AuthState {
-    headers: Vec<(String, String)>,
-    storage: Option<Value>,
-    /// When the token was read, for profiles with `refresh`.
-    fetched: Instant,
-}
-
 pub struct Engine {
     pub project: Project,
     pub opts: RunOptions,
@@ -88,7 +82,10 @@ pub struct Engine {
     http: reqwest::Client,
     pub masker: Masker,
     env_vars: serde_json::Map<String, Value>,
-    auth: Mutex<HashMap<String, Result<AuthState, String>>>,
+    auth: std::sync::Mutex<HashMap<String, Arc<ProfileAuth>>>,
+    /// Which profile's login waits on which profile's attempt, now: the
+    /// edges along which logins could wait for each other.
+    waits: std::sync::Mutex<HashMap<String, String>>,
     events: EventSink,
 }
 
@@ -99,6 +96,96 @@ struct FlowState {
     attempt: u32,
     /// Only emails sent after this count.
     started: chrono::DateTime<chrono::Utc>,
+    /// The profiles whose logins these steps run inside, outermost first.
+    signing_in: Vec<String>,
+    /// How long closing each browser may take.
+    close_timeout: Duration,
+}
+
+impl FlowState {
+    async fn close_sessions(&mut self) {
+        for (_, s) in self.sessions.drain() {
+            close_within(s, self.close_timeout).await;
+        }
+    }
+}
+
+/// Browsers still open when a flow's state goes (a sign-in, or a use that
+/// was cancelled) are closed in the background.
+impl Drop for FlowState {
+    fn drop(&mut self) {
+        for (_, s) in self.sessions.drain() {
+            close_in_background(s, self.close_timeout);
+        }
+    }
+}
+
+/// Close a browser session, giving up after `timeout` so a hung close holds nothing up.
+async fn close_within(session: Box<dyn Session>, timeout: Duration) {
+    let _ = tokio::time::timeout(timeout, session.close()).await;
+}
+
+/// Close a browser session in a task of its own, so nothing waits for it.
+fn close_in_background(session: Box<dyn Session>, timeout: Duration) {
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(close_within(session, timeout));
+    }
+}
+
+/// A browser session that is closed in the background when it is dropped,
+/// on every path: done with, failed, timed out or cancelled.
+struct ClosedOnDrop {
+    session: Option<Box<dyn Session>>,
+    timeout: Duration,
+}
+
+impl ClosedOnDrop {
+    fn session(&self) -> anyhow::Result<&dyn Session> {
+        self.session.as_deref().ok_or_else(|| anyhow!("the browser session is gone"))
+    }
+
+    /// The session, for a holder that closes it itself from now on.
+    fn into_session(mut self) -> anyhow::Result<Box<dyn Session>> {
+        self.session.take().ok_or_else(|| anyhow!("the browser session is gone"))
+    }
+}
+
+/// Open a browser in a task of its own, so that one opening after its caller
+/// gave up or was dropped is still closed, in the background, when it opens.
+async fn open_browser(driver: &Arc<dyn Driver>, options: SessionOptions, close_timeout: Duration) -> anyhow::Result<ClosedOnDrop> {
+    let driver = Arc::clone(driver);
+    let (opened, opening) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let session = driver.new_session(options).await.map(|s| ClosedOnDrop { session: Some(s), timeout: close_timeout });
+        // Sent or not, the session closes itself once nobody holds it.
+        let _ = opened.send(session);
+    });
+    opening.await.map_err(|_| anyhow!("the task opening the browser ended without one"))?
+}
+
+/// While held, `from`'s login waits on `to`'s attempt.
+struct Waiting<'a> {
+    waits: &'a std::sync::Mutex<HashMap<String, String>>,
+    from: String,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.waits.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.from);
+    }
+}
+
+impl Drop for ClosedOnDrop {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take() {
+            close_in_background(session, self.timeout);
+        }
+    }
+}
+
+/// Why a login can never finish: following `path`, it signs in as its own profile again.
+fn login_loop(path: &[String]) -> String {
+    format!("its login signs in as itself ({}), so it would wait for its own sign-in forever", path.join(" → "))
 }
 
 type StepFuture<'a> = Pin<Box<dyn Future<Output = StepResult> + Send + 'a>>;
@@ -123,7 +210,7 @@ impl Engine {
                 }
             }
         }
-        Ok(Engine { project, opts, driver, http, masker: Masker::default(), env_vars, auth: Mutex::new(HashMap::new()), events })
+        Ok(Engine { project, opts, driver, http, masker: Masker::default(), env_vars, auth: std::sync::Mutex::new(HashMap::new()), waits: std::sync::Mutex::new(HashMap::new()), events })
     }
 
     pub fn driver_name(&self) -> String {
@@ -137,20 +224,21 @@ impl Engine {
 
     /// Headers an auth profile adds to HTTP requests (signs in once per engine).
     pub async fn auth_headers(&self, profile: &str) -> Result<Vec<(String, String)>, String> {
-        self.auth(profile).await.map(|a| a.headers)
+        self.auth(profile, Need::Token, &[]).await.map(|a| a.headers)
     }
 
-    /// A browser session for exploration, optionally signed in as a profile.
+    /// A browser session for exploration, optionally signed in as a profile
+    /// (its kept sign-in, so a failed token refresh doesn't stop it).
     pub async fn open_session(&self, profile: Option<&str>) -> anyhow::Result<Box<dyn Session>> {
         let driver = self.driver.as_ref().ok_or_else(|| anyhow!("no browser driver is running"))?;
         let storage = match profile.filter(|p| !p.is_empty()) {
             None => None,
             Some(p) => {
-                let a = self.auth(p).await.map_err(|e| anyhow!("auth profile `{p}`: {e}"))?;
+                let a = self.auth(p, Need::SignIn, &[]).await.map_err(|e| anyhow!("auth profile `{p}`: {e}"))?;
                 Some(a.storage.ok_or_else(|| anyhow!("auth profile `{p}` is not a browser login"))?)
             }
         };
-        driver.new_session(SessionOptions { storage_state: storage }).await
+        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
     }
 
     /// The project's `[email]` mailbox, with templates (secrets) filled in.
@@ -195,16 +283,16 @@ impl Engine {
             let me = Arc::clone(self);
             let sem = Arc::clone(&sem);
             handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire_owned().await.expect("semaphore");
+                let _permit = sem.acquire_owned().await?;
                 (me.events)(Event::FlowStarted { id: flow.id.clone(), title: flow.title.clone() });
                 let r = me.run_flow(flow).await;
                 (me.events)(Event::FlowFinished(Box::new(r.clone())));
-                r
+                anyhow::Ok(r)
             }));
         }
         let mut results = Vec::new();
         for h in handles {
-            match h.await {
+            match h.await.map_err(anyhow::Error::from).and_then(|r| r) {
                 Ok(r) => results.push(r),
                 Err(e) => (self.events)(Event::Log(format!("internal error: {e}"))),
             }
@@ -304,7 +392,8 @@ impl Engine {
 
     async fn attempt(&self, flow: &Flow, n: u32) -> Attempt {
         let started = Instant::now();
-        let mut st = FlowState { vars: self.vars(n), sessions: HashMap::new(), flow_id: flow.id.clone(), attempt: n, started: chrono::Utc::now() };
+        let mut st =
+            FlowState { vars: self.vars(n), sessions: HashMap::new(), flow_id: flow.id.clone(), attempt: n, started: chrono::Utc::now(), signing_in: vec![], close_timeout: self.opts.timeout };
         // A scratch folder of its own for this attempt: `{{run.tmp}}`.
         let tmp = std::env::temp_dir().join(format!("enocone-{}", self.opts.run_id)).join(format!("{}-{n}", sanitize(&flow.id)));
         if std::fs::create_dir_all(&tmp).is_ok() {
@@ -345,9 +434,7 @@ impl Engine {
                 }
             }
         }
-        for (_, s) in st.sessions.drain() {
-            let _ = s.close().await;
-        }
+        st.close_sessions().await;
         let status = if steps.iter().any(|s| s.status == Status::Failed) {
             Status::Failed
         } else if steps.iter().any(|s| s.status == Status::Pending) {
@@ -537,7 +624,7 @@ impl Engine {
                     }
                     Block::Http(spec) => {
                         let auth = match &spec.auth {
-                            Some(name) => match self.auth(name).await {
+                            Some(name) => match self.auth(name, Need::Token, &st.signing_in).await {
                                 Ok(a) => a.headers,
                                 Err(e) => {
                                     r.error = Some(StepError { message: format!("auth profile `{name}`: {e}"), expected: None, actual: None });
@@ -556,13 +643,15 @@ impl Engine {
                     }
                     Block::Browser(spec) => {
                         let key = spec.as_profile.clone().unwrap_or_default();
-                        if let Err(e) = self.ensure_session(st, &key).await {
-                            r.error = Some(StepError { message: self.masker.mask(&e.to_string()), expected: None, actual: None });
-                            break;
-                        }
-                        let session = st.sessions.get(&key).expect("session");
+                        let session = match self.ensure_session(st, &key).await {
+                            Ok(session) => session,
+                            Err(e) => {
+                                r.error = Some(StepError { message: self.masker.mask(&e.to_string()), expected: None, actual: None });
+                                break;
+                            }
+                        };
                         let t = Timeouts { action: self.opts.timeout, navigation: self.opts.navigation_timeout };
-                        let out = run_browser(session.as_ref(), &spec, self.base_url().as_deref(), &t, &self.masker).await;
+                        let out = run_browser(session, &spec, self.base_url().as_deref(), &t, &self.masker).await;
                         used_browser = Some(key);
                         wants_shot |= out.wants_screenshot;
                         r.records.extend(out.records.into_iter().map(Record::Action));
@@ -674,27 +763,32 @@ impl Engine {
         })
     }
 
-    async fn ensure_session(&self, st: &mut FlowState, profile: &str) -> anyhow::Result<()> {
-        if st.sessions.contains_key(profile) {
-            return Ok(());
-        }
+    /// The flow's browser for `profile`, opened (and signed in) on first use.
+    async fn ensure_session<'s>(&self, st: &'s mut FlowState, profile: &str) -> anyhow::Result<&'s dyn Session> {
+        let session = match st.sessions.entry(profile.to_string()) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(self.new_flow_session(profile, &st.signing_in).await?),
+        };
+        Ok(&**session)
+    }
+
+    /// A new browser for a flow, with `profile`'s kept sign-in when one is named.
+    async fn new_flow_session(&self, profile: &str, signing_in: &[String]) -> anyhow::Result<Box<dyn Session>> {
         let driver = self.driver.as_ref().ok_or_else(|| anyhow!("this step needs a browser, but no browser driver is running"))?;
         let storage = if profile.is_empty() {
             None
         } else {
-            let a = self.auth(profile).await.map_err(|e| anyhow!("auth profile `{profile}`: {e}"))?;
+            let a = self.auth(profile, Need::SignIn, signing_in).await.map_err(|e| anyhow!("auth profile `{profile}`: {e}"))?;
             if a.storage.is_none() {
                 bail!("auth profile `{profile}` is not a browser login, so it can't sign in a browser (use type = \"browser\")");
             }
             a.storage
         };
-        let s = driver.new_session(SessionOptions { storage_state: storage }).await?;
-        st.sessions.insert(profile.to_string(), s);
-        Ok(())
+        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
     }
 
     /// The `Cookie` header a signed-in browser would send to `url`: from the
-    /// flow's browser for that profile if it is open, else the profile's saved
+    /// flow's browser for that profile if it is open, else the profile's kept
     /// sign-in; without a profile, from the flow's own browser. Cookie values
     /// are masked from then on.
     async fn browser_cookies(&self, st: &FlowState, profile: Option<&str>, url: &str) -> Result<Option<String>, String> {
@@ -702,7 +796,7 @@ impl Engine {
         let state = match st.sessions.get(key) {
             Some(session) => session.storage_state().await.map_err(|e| format!("reading the browser's cookies: {e}"))?,
             None => match profile {
-                Some(name) => match self.auth(name).await {
+                Some(name) => match self.auth(name, Need::SignIn, &st.signing_in).await {
                     Ok(AuthState { storage: Some(s), .. }) => s,
                     Ok(_) => return Err(format!("`session: browser` needs a browser sign-in, but auth profile `{name}` isn't one (use type = \"browser\")")),
                     Err(e) => return Err(format!("auth profile `{name}`: {e}")),
@@ -722,32 +816,84 @@ impl Engine {
         Ok((!cookies.is_empty()).then(|| cookies.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")))
     }
 
-    /// Resolve an auth profile once per run (logins are serialised).
-    async fn auth(&self, name: &str) -> Result<AuthState, String> {
-        let mut cache = self.auth.lock().await;
-        if let Some(r) = cache.get(name) {
-            let stale = match (r, self.project.config.auth.get(name)) {
-                (Ok(state), Some(AuthProfile::Browser { token: Some(t), .. })) => match t.refresh.as_deref().map(parse_duration_str) {
-                    Some(Ok(age)) => state.fetched.elapsed() >= age,
-                    _ => false,
-                },
-                _ => false,
-            };
-            if !stale {
-                return r.clone();
+    /// Resolve an auth profile once per run, as `crate::auth` describes:
+    /// one attempt in flight per profile, whose one outcome every use waiting
+    /// on it gets; other profiles never wait for it. A use that needs only
+    /// the sign-in (`Need::SignIn`) gets the kept sign-in at once once there
+    /// is one, and waits only for the first sign-in.
+    ///
+    /// `signing_in` names the profiles whose logins this use runs inside. A
+    /// login that signs in as one of them again fails at once. So does one
+    /// that would wait on an attempt that is itself waiting, directly or
+    /// through other logins, on this login: each such wait is recorded while
+    /// it lasts, and the error names the chain. A sign-in run inside another
+    /// profile's login also counts against that login's budget.
+    async fn auth(&self, name: &str, need: Need, signing_in: &[String]) -> Result<AuthState, String> {
+        if let Some(at) = signing_in.iter().position(|p| p == name) {
+            return Err(login_loop(&[&signing_in[at..], &[name.to_string()]].concat()));
+        }
+        let _waiting = signing_in.last().map(|from| self.start_waiting(from, name)).transpose().map_err(|path| login_loop(&path))?;
+        let profile = self.profile_auth(name);
+        loop {
+            match profile.next(need, |kept| self.token_is_stale(name, kept)) {
+                Next::Answer(outcome) => return outcome,
+                Next::Wait(attempt) => {
+                    if let Some(outcome) = outcome_of(attempt).await {
+                        return outcome;
+                    }
+                }
+                Next::SignIn(lead) => {
+                    if matches!(self.project.config.auth.get(name), Some(AuthProfile::Browser { .. } | AuthProfile::Oauth2 { .. })) {
+                        (self.events)(Event::Log(format!("signing in as `{name}`")));
+                    }
+                    let budget = self.opts.timeout * SIGN_IN_STEPS;
+                    let deadline = tokio::time::Instant::now() + budget;
+                    let signed_in = tokio::time::timeout_at(deadline, self.resolve_auth(name, signing_in, deadline))
+                        .await
+                        .unwrap_or_else(|_| Err(anyhow!("signing in gave no answer within {budget:?}")))
+                        .map_err(|e| self.masker.mask(&format!("{e:#}")));
+                    return lead.finish(signed_in);
+                }
+                Next::Refresh(kept, lead) => {
+                    (self.events)(Event::Log(format!("refreshing the token for `{name}`")));
+                    let refreshed = self.refresh_token(name, kept).await.map_err(|e| self.masker.mask(&format!("{e:#}")));
+                    return lead.finish(refreshed);
+                }
             }
-            let state = r.clone().expect("checked above");
-            (self.events)(Event::Log(format!("refreshing the token for `{name}`")));
-            let fresh = self.refresh_token(name, state).await.map_err(|e| self.masker.mask(&format!("{e:#}")));
-            cache.insert(name.to_string(), fresh.clone());
-            return fresh;
         }
-        if matches!(self.project.config.auth.get(name), Some(AuthProfile::Browser { .. } | AuthProfile::Oauth2 { .. })) {
-            (self.events)(Event::Log(format!("signing in as `{name}`")));
+    }
+
+    /// Record that `from`'s login waits on `to`'s attempt, unless `to` is
+    /// already waiting, directly or through other logins, on `from`: then the
+    /// chain from `from` round to itself again.
+    fn start_waiting(&self, from: &str, to: &str) -> Result<Waiting<'_>, Vec<String>> {
+        let mut waits = self.waits.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut path = vec![from.to_string(), to.to_string()];
+        let mut at = to;
+        // Recorded waits never form a loop, so this walk ends within their number.
+        for _ in 0..waits.len() {
+            let Some(next) = waits.get(at) else { break };
+            path.push(next.clone());
+            if next == from {
+                return Err(path);
+            }
+            at = next;
         }
-        let r = self.resolve_auth(name).await.map_err(|e| self.masker.mask(&format!("{e:#}")));
-        cache.insert(name.to_string(), r.clone());
-        r
+        waits.insert(from.to_string(), to.to_string());
+        Ok(Waiting { waits: &self.waits, from: from.to_string() })
+    }
+
+    fn profile_auth(&self, name: &str) -> Arc<ProfileAuth> {
+        let mut slots = self.auth.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(slots.entry(name.to_string()).or_default())
+    }
+
+    /// Whether a browser profile's token is older than its `refresh` age.
+    fn token_is_stale(&self, name: &str, state: &AuthState) -> bool {
+        match self.project.config.auth.get(name) {
+            Some(AuthProfile::Browser { token: Some(t), .. }) => t.refresh.as_deref().map(parse_duration_str).is_some_and(|age| age.is_ok_and(|age| state.fetched.elapsed() >= age)),
+            _ => false,
+        }
     }
 
     fn render_str(&self, s: &str) -> anyhow::Result<String> {
@@ -758,7 +904,11 @@ impl Engine {
         }
     }
 
-    /// Read a browser profile's token again from its saved session (no new login).
+    /// Read a browser profile's token again from its saved session (no new
+    /// login). The whole refresh gives up after the step timeout. Its browser
+    /// is closed in the background on every path, so a hung close holds up
+    /// no use, and a browser that opens only after the refresh gave up is
+    /// closed when it opens.
     async fn refresh_token(&self, name: &str, state: AuthState) -> anyhow::Result<AuthState> {
         let Some(AuthProfile::Browser { token: Some(t), .. }) = self.project.config.auth.get(name).cloned() else { bail!("not a browser profile with a token") };
         let url = self.render_str(&t.url)?;
@@ -768,42 +918,49 @@ impl Engine {
             )
         };
         let driver = self.driver.as_ref().ok_or_else(|| anyhow!("refreshing needs a browser, but no browser driver is running"))?;
-        let session = driver.new_session(SessionOptions { storage_state: state.storage.clone() }).await.map_err(fail)?;
-        let result = async {
-            // Any page on the token's origin will do for a same-origin fetch.
-            let origin = reqwest::Url::parse(&url).map(|u| u.origin().ascii_serialization()).unwrap_or_else(|_| url.clone());
-            session.goto(&origin, self.opts.navigation_timeout).await?;
-            let tok = self.read_token(session.as_ref(), &url, &t.path).await?;
+        let timeout = self.opts.timeout;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let refreshed = tokio::time::timeout_at(deadline, async {
+            let browser = open_browser(driver, SessionOptions { storage_state: state.storage.clone() }, timeout).await?;
+            let session = browser.session()?;
+            // The fetch needs only a committed document on the token's own URL, not a loaded page.
+            session.goto_committed(&url, self.opts.navigation_timeout).await?;
+            let tok = self.read_token(session, &url, &t.path, deadline).await?;
             let storage = session.storage_state().await.ok().or(state.storage.clone());
-            anyhow::Ok(AuthState { headers: vec![("Authorization".to_string(), format!("Bearer {tok}"))], storage, fetched: Instant::now() })
-        }
+            anyhow::Ok(AuthState { headers: vec![("Authorization".to_string(), format!("Bearer {tok}"))], storage, fetched: tokio::time::Instant::now() })
+        })
         .await;
-        let _ = session.close().await;
-        result.map_err(fail)
+        refreshed.unwrap_or_else(|_| Err(anyhow!("the browser gave no answer within {timeout:?}"))).map_err(fail)
     }
 
-    async fn read_token(&self, session: &dyn Session, url: &str, path: &str) -> anyhow::Result<String> {
-        let js = format!("fetch({}, {{ credentials: 'include' }}).then(r => r.json())", serde_json::to_string(url)?);
-        let body = session.eval(&js).await.with_context(|| format!("fetching token from {url}"))?;
+    /// Fetch the token from inside a signed-in page, giving up at `deadline`.
+    async fn read_token(&self, session: &dyn Session, url: &str, path: &str, deadline: tokio::time::Instant) -> anyhow::Result<String> {
+        let allowed = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let js = format!("fetch({}, {{ credentials: 'include', signal: AbortSignal.timeout({}) }}).then(r => r.json())", serde_json::to_string(url)?, allowed.as_millis());
+        let body = tokio::time::timeout_at(deadline, session.eval(&js))
+            .await
+            .map_err(|_| anyhow!("fetching token from {url} gave no answer within {allowed:?}"))?
+            .with_context(|| format!("fetching token from {url}"))?;
         let path = if path.starts_with('$') { path.to_string() } else { format!("$.{path}") };
         let tok = json_at(&body, &path).and_then(|v| v.as_str().map(String::from)).ok_or_else(|| anyhow!("no token at {path} in {url} (are you signed in?)"))?;
         self.masker.add(&tok);
         Ok(tok)
     }
 
-    async fn resolve_auth(&self, name: &str) -> anyhow::Result<AuthState> {
+    /// Sign in as `name`; a browser login gives up its last reads at `deadline`.
+    async fn resolve_auth(&self, name: &str, signing_in: &[String], deadline: tokio::time::Instant) -> anyhow::Result<AuthState> {
         let profile =
             self.project.config.auth.get(name).ok_or_else(|| anyhow!("not defined in enocone.toml (defined: {})", self.project.config.auth.keys().cloned().collect::<Vec<_>>().join(", ")))?.clone();
         match profile {
             AuthProfile::Header { header, value } => {
                 let v = self.render_str(&value)?;
                 self.masker.add(&v);
-                Ok(AuthState { headers: vec![(header, v)], storage: None, fetched: Instant::now() })
+                Ok(AuthState { headers: vec![(header, v)], storage: None, fetched: tokio::time::Instant::now() })
             }
             AuthProfile::Bearer { token } => {
                 let t = self.render_str(&token)?;
                 self.masker.add(&t);
-                Ok(AuthState { headers: vec![("Authorization".into(), format!("Bearer {t}"))], storage: None, fetched: Instant::now() })
+                Ok(AuthState { headers: vec![("Authorization".into(), format!("Bearer {t}"))], storage: None, fetched: tokio::time::Instant::now() })
             }
             AuthProfile::Oauth2 { token_url, grant, client_id, client_secret, username, password, scope } => {
                 let mut form = vec![("grant_type".to_string(), grant.clone()), ("client_id".into(), self.render_str(&client_id)?)];
@@ -822,47 +979,115 @@ impl Engine {
                 let body: Value = resp.json().await.unwrap_or(Value::Null);
                 let token = body.get("access_token").and_then(Value::as_str).ok_or_else(|| anyhow!("token endpoint returned {status} without access_token: {body}"))?;
                 self.masker.add(token);
-                Ok(AuthState { headers: vec![("Authorization".into(), format!("Bearer {token}"))], storage: None, fetched: Instant::now() })
+                Ok(AuthState { headers: vec![("Authorization".into(), format!("Bearer {token}"))], storage: None, fetched: tokio::time::Instant::now() })
             }
             AuthProfile::Browser { login, params, token } => {
                 let driver = self.driver.as_ref().ok_or_else(|| anyhow!("needs a browser to sign in, but no browser driver is running"))?;
                 let fragment = self.project.load_fragment(&login)?;
-                let session = driver.new_session(SessionOptions::default()).await?;
-                let mut st = FlowState { vars: self.vars(0), sessions: HashMap::new(), flow_id: format!("auth-{name}"), attempt: 1, started: chrono::Utc::now() };
-                for (k, v) in &params {
-                    let v = self.render_str(v)?;
-                    st.vars.set(k, Value::String(v));
+                if let Some(path) = self.login_loop_from(name, &fragment) {
+                    bail!(login_loop(&path));
                 }
-                st.sessions.insert(String::new(), session);
-                let mut failure = None;
-                for step in fragment.steps() {
-                    let r = self.exec_step(&mut st, step, "").await;
-                    if r.status == Status::Failed {
-                        failure = Some(format!(
-                            "login step \"{}\" failed: {}{}",
-                            step.intent,
-                            r.error.map(|e| e.message).unwrap_or_default(),
-                            r.screenshot.map(|s| format!(" (screenshot: {s})")).unwrap_or_default()
-                        ));
-                        break;
-                    }
+                let params = params.iter().map(|(k, v)| Ok((k.clone(), self.render_str(v)?))).collect::<anyhow::Result<Vec<_>>>()?;
+                let browser = open_browser(driver, SessionOptions::default(), self.opts.timeout).await?;
+                let mut st = FlowState {
+                    vars: self.vars(0),
+                    sessions: HashMap::new(),
+                    flow_id: format!("auth-{name}"),
+                    attempt: 1,
+                    started: chrono::Utc::now(),
+                    signing_in: [signing_in, &[name.to_string()]].concat(),
+                    close_timeout: self.opts.timeout,
+                };
+                for (k, v) in params {
+                    st.vars.set(&k, Value::String(v));
                 }
-                let session = st.sessions.remove("").expect("login session");
-                if let Some(f) = failure {
-                    let _ = session.close().await;
-                    bail!(f);
-                }
-                let storage = session.storage_state().await?;
-                let mut headers = vec![];
-                if let Some(t) = token {
-                    let url = self.render_str(&t.url)?;
-                    let tok = self.read_token(session.as_ref(), &url, &t.path).await?;
-                    headers.push(("Authorization".to_string(), format!("Bearer {tok}")));
-                }
-                let _ = session.close().await;
-                Ok(AuthState { headers, storage: Some(storage), fetched: Instant::now() })
+                st.sessions.insert(String::new(), browser.into_session()?);
+                // Its browsers close in the background as `st` goes.
+                self.sign_in(&mut st, &fragment, token.as_ref(), deadline).await
             }
         }
+    }
+
+    /// Run a login fragment in `st`'s default browser, then read what it
+    /// signed in, each read within a step timeout and by `deadline`.
+    async fn sign_in(&self, st: &mut FlowState, fragment: &Flow, token: Option<&BrowserToken>, deadline: tokio::time::Instant) -> anyhow::Result<AuthState> {
+        for step in fragment.steps() {
+            let r = self.exec_step(st, step, "").await;
+            if r.status == Status::Failed {
+                bail!("login step \"{}\" failed: {}{}", step.intent, r.error.map(|e| e.message).unwrap_or_default(), r.screenshot.map(|s| format!(" (screenshot: {s})")).unwrap_or_default());
+            }
+        }
+        let session = st.sessions.get("").ok_or_else(|| anyhow!("the login fragment's browser session is gone"))?;
+        let read_by = |now: tokio::time::Instant| deadline.min(now + self.opts.timeout);
+        let started = tokio::time::Instant::now();
+        let storage = tokio::time::timeout_at(read_by(started), session.storage_state())
+            .await
+            .map_err(|_| anyhow!("reading the signed-in browser's state gave no answer within {:?}", read_by(started) - started))??;
+        let headers = match token {
+            Some(t) => {
+                let url = self.render_str(&t.url)?;
+                let tok = self.read_token(session.as_ref(), &url, &t.path, read_by(tokio::time::Instant::now())).await?;
+                vec![("Authorization".to_string(), format!("Bearer {tok}"))]
+            }
+            None => vec![],
+        };
+        Ok(AuthState { headers, storage: Some(storage), fetched: tokio::time::Instant::now() })
+    }
+
+    /// The profiles a login fragment signs in as by name (`as:` in browser
+    /// blocks, `auth:` in http blocks), including in the fragments it uses.
+    /// Names filled in from templates are left to the check made at each use.
+    fn signs_in_as(&self, fragment: &Flow, used: &mut HashSet<String>, found: &mut BTreeSet<String>) {
+        for raw in fragment.steps().flat_map(|s| &s.blocks) {
+            // Read as the block itself reads the name (text, a number or true/false).
+            let named = |key: &str| match raw.value.get(key) {
+                Some(Value::String(s)) if !s.contains("{{") => Some(s.clone()),
+                Some(Value::Number(n)) => Some(n.to_string()),
+                Some(Value::Bool(b)) => Some(b.to_string()),
+                _ => None,
+            };
+            match raw.kind {
+                BlockKind::Browser => found.extend(named("as")),
+                BlockKind::Http => found.extend(named("auth")),
+                BlockKind::Use => {
+                    if let Ok(u) = UseSpec::from_value(&raw.value)
+                        && used.insert(u.fragment.clone())
+                        && let Ok(f) = self.project.load_fragment(&u.fragment)
+                    {
+                        self.signs_in_as(&f, used, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// How `name`'s login (`login`) reaches a sign-in as `name` again through
+    /// the logins of the profiles it signs in as, if it does: `name`, the
+    /// profiles in between, then `name`.
+    fn login_loop_from(&self, name: &str, login: &Flow) -> Option<Vec<String>> {
+        let profiles_of = |fragment: &Flow| {
+            let mut found = BTreeSet::new();
+            self.signs_in_as(fragment, &mut HashSet::new(), &mut found);
+            found
+        };
+        let mut seen = HashSet::from([name.to_string()]);
+        let mut paths = vec![(vec![name.to_string()], profiles_of(login))];
+        while let Some((path, next)) = paths.pop() {
+            for profile in next {
+                let path = [path.as_slice(), std::slice::from_ref(&profile)].concat();
+                if profile == name {
+                    return Some(path);
+                }
+                if seen.insert(profile.clone())
+                    && let Some(AuthProfile::Browser { login, .. }) = self.project.config.auth.get(&profile)
+                    && let Ok(fragment) = self.project.load_fragment(login)
+                {
+                    paths.push((path, profiles_of(&fragment)));
+                }
+            }
+        }
+        None
     }
 
     pub async fn shutdown(&self) {
@@ -990,5 +1215,767 @@ mod cookie_tests {
         assert_eq!(names("https://app.test/admin/users"), ["session", "shared", "admin", "sec"]);
         assert_eq!(names("http://app.test/administrator"), ["session", "shared"]);
         assert_eq!(names("http://api.app.test/"), ["shared"]);
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use enocone_spec::blocks::Locator;
+    use tempfile::TempDir;
+    use tokio::sync::{Barrier, Notify};
+
+    use super::*;
+    use crate::auth::REFRESH_RETRY_AFTER;
+    use crate::driver::{UiAction, UiQuery};
+
+    type Reply = Pin<Box<dyn Future<Output = anyhow::Result<Value>> + Send>>;
+
+    /// Where a token refresh's browser stops answering.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Hang {
+        /// Opening the browser, until `release` is notified.
+        Open,
+        /// Committing the token URL, forever.
+        Commit,
+        /// Reading its storage state, forever.
+        Storage,
+        /// Closing, forever, once the close is recorded.
+        Close,
+        /// Reading the page's address, forever, in a sign-in's browser.
+        SignInUrl,
+        /// Opening a browser without saved storage (a sign-in's, or a
+        /// flow's own), until `release` is notified.
+        OpenWithoutStorage,
+        /// Reading its storage state, forever, in a sign-in's browser.
+        SignInStorage,
+    }
+
+    /// A browser whose session fetches answer as `reply` says, by call number.
+    /// A session opened with saved storage is a refresh's, where `hang` applies.
+    struct FakeBrowser {
+        opens: AtomicUsize,
+        opened: AtomicUsize,
+        closed: StdMutex<Vec<usize>>,
+        closing: Notify,
+        release: Notify,
+        evals: AtomicUsize,
+        navigations: StdMutex<Vec<String>>,
+        login_fails: bool,
+        hangs: &'static [Hang],
+        /// When set, each sign-in's first page load waits until this many have started.
+        logins_meet: Option<Barrier>,
+        /// How long each navigation takes.
+        latency: Duration,
+        reply: Box<dyn Fn(usize) -> Reply + Send + Sync>,
+    }
+
+    impl FakeBrowser {
+        fn opens(&self) -> usize {
+            self.opens.load(Ordering::SeqCst)
+        }
+
+        fn opened(&self) -> usize {
+            self.opened.load(Ordering::SeqCst)
+        }
+
+        fn evals(&self) -> usize {
+            self.evals.load(Ordering::SeqCst)
+        }
+
+        fn closes(&self) -> usize {
+            self.closed.lock().expect("closed").len()
+        }
+
+        /// Every session opened so far is closed (some close in the
+        /// background, so this waits for them), and none more than once.
+        async fn assert_each_closed_once(&self) {
+            let all_closed = async {
+                loop {
+                    let closing = self.closing.notified();
+                    if self.closes() >= self.opened() {
+                        break;
+                    }
+                    closing.await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(60), all_closed).await.expect("every session is closed");
+            let mut closed = self.closed.lock().expect("closed").clone();
+            closed.sort_unstable();
+            assert_eq!(closed, (0..self.opened()).collect::<Vec<_>>(), "sessions closed, by id");
+        }
+    }
+
+    struct FakeDriver(Arc<FakeBrowser>);
+
+    struct FakeSession {
+        id: usize,
+        refresh: bool,
+        browser: Arc<FakeBrowser>,
+    }
+
+    impl FakeSession {
+        async fn hangs_at(&self, at: Hang) {
+            if self.refresh && self.browser.hangs.contains(&at) {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Driver for FakeDriver {
+        fn name(&self) -> String {
+            "fake".into()
+        }
+        async fn new_session(&self, options: SessionOptions) -> anyhow::Result<Box<dyn Session>> {
+            self.0.opens.fetch_add(1, Ordering::SeqCst);
+            let refresh = options.storage_state.is_some();
+            if (refresh && self.0.hangs.contains(&Hang::Open)) || (!refresh && self.0.hangs.contains(&Hang::OpenWithoutStorage)) {
+                self.0.release.notified().await;
+            }
+            let id = self.0.opened.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeSession { id, refresh, browser: Arc::clone(&self.0) }))
+        }
+        async fn shutdown(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Session for FakeSession {
+        async fn goto(&self, url: &str, _: Duration) -> anyhow::Result<()> {
+            self.browser.navigations.lock().expect("navigations").push(format!("load {url}"));
+            tokio::time::sleep(self.browser.latency).await;
+            if let Some(meet) = &self.browser.logins_meet {
+                meet.wait().await;
+            }
+            if self.browser.login_fails {
+                bail!("the sign-in page is down");
+            }
+            Ok(())
+        }
+        async fn goto_committed(&self, url: &str, _: Duration) -> anyhow::Result<()> {
+            self.browser.navigations.lock().expect("navigations").push(format!("commit {url}"));
+            tokio::time::sleep(self.browser.latency).await;
+            self.hangs_at(Hang::Commit).await;
+            Ok(())
+        }
+        async fn act(&self, _: &Locator, _: UiAction, _: Duration) -> anyhow::Result<()> {
+            bail!("not used")
+        }
+        async fn press(&self, _: &str) -> anyhow::Result<()> {
+            bail!("not used")
+        }
+        async fn query(&self, _: &Locator, _: UiQuery) -> anyhow::Result<Value> {
+            bail!("not used")
+        }
+        async fn url(&self) -> anyhow::Result<String> {
+            if !self.refresh && self.browser.hangs.contains(&Hang::SignInUrl) {
+                std::future::pending::<()>().await;
+            }
+            Ok("http://app.test/".into())
+        }
+        async fn title(&self) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn snapshot(&self) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+            bail!("not used")
+        }
+        async fn eval(&self, _: &str) -> anyhow::Result<Value> {
+            let n = self.browser.evals.fetch_add(1, Ordering::SeqCst);
+            (self.browser.reply)(n).await
+        }
+        async fn storage_state(&self) -> anyhow::Result<Value> {
+            self.hangs_at(Hang::Storage).await;
+            if !self.refresh && self.browser.hangs.contains(&Hang::SignInStorage) {
+                std::future::pending::<()>().await;
+            }
+            Ok(serde_json::json!({
+                "cookies": [{ "name": "sid", "value": "s1", "domain": "app.test", "path": "/", "expires": -1, "secure": false }],
+                "origins": []
+            }))
+        }
+        async fn take_console(&self) -> Vec<String> {
+            vec![]
+        }
+        async fn close(&self) -> anyhow::Result<()> {
+            self.browser.closed.lock().expect("closed").push(self.id);
+            self.browser.closing.notify_waiters();
+            self.hangs_at(Hang::Close).await;
+            Ok(())
+        }
+    }
+
+    fn token(n: usize) -> Reply {
+        let body = serde_json::json!({ "accessToken": format!("t{n}") });
+        Box::pin(async move { Ok(body) })
+    }
+
+    fn stalled(_: usize) -> Reply {
+        Box::pin(async { Err(anyhow!("the page stalled")) })
+    }
+
+    /// The engine under test, with the project folder it reads its login from.
+    struct Fixture {
+        engine: Arc<Engine>,
+        browser: Arc<FakeBrowser>,
+        _root: TempDir,
+    }
+
+    const OPEN_SIGN_IN: &str = "1. **Open the sign-in page**\n   ```browser\n   - goto: http://app.test/login\n   ```\n";
+
+    #[derive(Default)]
+    struct Setup {
+        refresh: &'static str,
+        params: &'static str,
+        login_fails: bool,
+        hangs: &'static [Hang],
+        logins_meet: usize,
+        latency: Duration,
+        /// The steps of `web`'s login, instead of opening the sign-in page.
+        login: Option<&'static str>,
+        /// More of enocone.toml, and the fragments it names.
+        config: &'static str,
+        fragments: &'static [(&'static str, &'static str)],
+    }
+
+    /// An engine whose `web` profile signs in through the fake browser and
+    /// refreshes its token when it is `refresh` old; `key` is a fixed header.
+    fn fixture(setup: Setup, reply: impl Fn(usize) -> Reply + Send + Sync + 'static) -> Fixture {
+        let root = TempDir::new().expect("project folder");
+        std::fs::create_dir_all(root.path().join("fragments")).expect("fragments folder");
+        let Setup { refresh, params, login_fails, hangs, logins_meet, latency, login, config, fragments } = setup;
+        for (name, steps) in [("sign-in", login.unwrap_or(OPEN_SIGN_IN))].into_iter().chain(fragments.iter().copied()) {
+            std::fs::write(root.path().join(format!("fragments/{name}.flow.md")), format!("# {name}\n\n## When\n\n{steps}")).expect("fragment");
+        }
+        let config = toml::from_str(&format!(
+            r#"
+            project = "auth-test"
+            [auth.web]
+            type = "browser"
+            login = "sign-in"
+            {params}
+            token = {{ url = "http://app.test/api/session", path = "$.accessToken", refresh = "{refresh}" }}
+            [auth.key]
+            type = "header"
+            header = "X-Key"
+            value = "k"
+            {config}
+            "#
+        ))
+        .expect("config");
+        let project = Project { root: root.path().to_path_buf(), config };
+        let opts = RunOptions::from_project(&project, "local".into(), root.path().join("out")).expect("options");
+        let browser = Arc::new(FakeBrowser {
+            opens: AtomicUsize::new(0),
+            opened: AtomicUsize::new(0),
+            closed: StdMutex::new(vec![]),
+            closing: Notify::new(),
+            release: Notify::new(),
+            evals: AtomicUsize::new(0),
+            navigations: StdMutex::new(vec![]),
+            login_fails,
+            hangs,
+            logins_meet: (logins_meet > 0).then(|| Barrier::new(logins_meet)),
+            latency,
+            reply: Box::new(reply),
+        });
+        let driver: Arc<dyn Driver> = Arc::new(FakeDriver(Arc::clone(&browser)));
+        let engine = Engine::new(project, opts, Some(driver), Arc::new(|_| {})).expect("engine");
+        Fixture { engine: Arc::new(engine), browser, _root: root }
+    }
+
+    fn refreshing(refresh: &'static str, reply: impl Fn(usize) -> Reply + Send + Sync + 'static) -> Fixture {
+        fixture(Setup { refresh, ..Setup::default() }, reply)
+    }
+
+    impl Fixture {
+        async fn token(&self, name: &str) -> Result<AuthState, String> {
+            self.engine.auth(name, Need::Token, &[]).await
+        }
+    }
+
+    fn bearer(r: &Result<AuthState, String>) -> Option<String> {
+        r.as_ref().ok().and_then(|a| a.headers.iter().find(|(k, _)| k == "Authorization").map(|(_, v)| v.clone()))
+    }
+
+    /// Fetch `n` signals `entered`, waits for `gate`, then answers as `answer` says.
+    fn gated(n: usize, entered: &Arc<Notify>, gate: &Arc<Notify>, answer: fn(usize) -> Reply) -> impl Fn(usize) -> Reply + Send + Sync + 'static {
+        let (entered, gate) = (Arc::clone(entered), Arc::clone(gate));
+        move |i| {
+            let (entered, gate) = (Arc::clone(&entered), Arc::clone(&gate));
+            Box::pin(async move {
+                if i != n {
+                    return token(i).await;
+                }
+                entered.notify_one();
+                gate.notified().await;
+                answer(i).await
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_refresh_answers_until_its_cooldown_then_is_retried() {
+        let f = refreshing("0s", |n| if n == 1 { stalled(n) } else { token(n) });
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t0"));
+        let failed = f.token("web").await.err().expect("the refresh fails");
+        assert!(failed.contains("refreshing the token for `web`") && failed.contains("the page stalled"), "{failed}");
+        tokio::time::advance(REFRESH_RETRY_AFTER - Duration::from_millis(1)).await;
+        assert_eq!(f.token("web").await.err().as_deref(), Some(failed.as_str()), "the failure answers within its cooldown");
+        assert_eq!((f.browser.opened(), f.browser.evals()), (2, 2), "no refresh was tried within the cooldown");
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t2"));
+        assert_eq!(f.browser.opened(), 3);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn uses_queued_behind_a_failing_refresh_share_its_failure() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("60s", gated(1, &entered, &gate, stalled));
+        f.token("web").await.expect("signs in");
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let all = async {
+            tokio::join!(f.token("web"), f.token("web"), f.token("web"), async {
+                entered.notified().await;
+                gate.notify_one();
+            })
+        };
+        let (a, b, c, ()) = tokio::time::timeout(Duration::from_secs(60), all).await.expect("the queued uses are answered");
+        let failed = a.err().expect("the refresh fails");
+        assert!(failed.contains("the page stalled"), "{failed}");
+        assert_eq!(b.err().as_deref(), Some(failed.as_str()));
+        assert_eq!(c.err().as_deref(), Some(failed.as_str()));
+        assert_eq!((f.browser.opened(), f.browser.evals()), (2, 2), "one sign-in and one refresh");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_good_refresh_clears_an_earlier_failure() {
+        let f = refreshing("0s", |n| if n == 1 { stalled(n) } else { token(n) });
+        f.token("web").await.expect("signs in");
+        f.token("web").await.err().expect("the refresh fails");
+        tokio::time::advance(REFRESH_RETRY_AFTER).await;
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t2"));
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t3"), "the next stale use refreshes at once");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_refresh_does_not_hold_up_other_profiles() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("0s", gated(1, &entered, &gate, token));
+        f.token("web").await.expect("signs in");
+        let (slow, other) = tokio::join!(f.token("web"), async {
+            entered.notified().await;
+            let other = tokio::time::timeout(Duration::from_secs(1), f.token("key")).await;
+            gate.notify_one();
+            other
+        });
+        let other = other.expect("another profile is not held up by the refresh").expect("header profile");
+        assert_eq!(other.headers, [("X-Key".to_string(), "k".to_string())]);
+        assert_eq!(bearer(&slow).as_deref(), Some("Bearer t1"));
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_uses_of_a_stale_profile_share_one_refresh() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("60s", gated(1, &entered, &gate, token));
+        f.token("web").await.expect("signs in");
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let both = async {
+            tokio::join!(f.token("web"), f.token("web"), async {
+                entered.notified().await;
+                gate.notify_one();
+            })
+        };
+        let (first, second, ()) = tokio::time::timeout(Duration::from_secs(60), both).await.expect("the stale token is refreshed");
+        assert_eq!(bearer(&first).as_deref(), Some("Bearer t1"));
+        assert_eq!(bearer(&second).as_deref(), Some("Bearer t1"));
+        assert_eq!(f.browser.opened(), 2);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_refresh_commits_the_token_url_and_gives_up_after_the_step_timeout() {
+        let f = refreshing("0s", |n| if n == 0 { token(n) } else { Box::pin(std::future::pending()) });
+        f.token("web").await.expect("signs in");
+        let started = tokio::time::Instant::now();
+        let failed = tokio::time::timeout(Duration::from_secs(600), f.token("web")).await.expect("bounded").err().expect("times out");
+        assert!(failed.contains("gave no answer within 10s"), "{failed}");
+        assert_eq!(started.elapsed(), Duration::from_secs(10));
+        assert_eq!(f.browser.navigations.lock().expect("navigations").as_slice(), ["load http://app.test/login", "commit http://app.test/api/session"]);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_login_step_closes_its_browser() {
+        let f = fixture(Setup { refresh: "0s", login_fails: true, ..Setup::default() }, token);
+        let failed = f.token("web").await.err().expect("the login fails");
+        assert!(failed.contains("login step \"Open the sign-in page\" failed") && failed.contains("the sign-in page is down"), "{failed}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_token_read_at_sign_in_closes_its_browser() {
+        let f = refreshing("0s", stalled);
+        let failed = f.token("web").await.err().expect("the token read fails");
+        assert!(failed.contains("the page stalled"), "{failed}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_param_that_does_not_render_opens_no_browser() {
+        let f = fixture(Setup { refresh: "0s", params: r#"params = { user = "{{nope}}" }"#, ..Setup::default() }, token);
+        let failed = f.token("web").await.err().expect("the param does not render");
+        assert!(failed.contains("unknown variable `nope`"), "{failed}");
+        assert_eq!(f.browser.opened(), 0);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    /// Signs in, then refreshes a stale token whose browser stops at `hangs`:
+    /// the refresh gives up after the step timeout, the uses queued behind it
+    /// share its failure, and the failure answers through its cooldown.
+    async fn a_refresh_hung_at(hangs: &'static [Hang]) -> Fixture {
+        let f = fixture(Setup { refresh: "0s", hangs, ..Setup::default() }, token);
+        f.token("web").await.expect("signs in");
+        let started = tokio::time::Instant::now();
+        let (first, queued) = tokio::time::timeout(Duration::from_secs(600), async { tokio::join!(f.token("web"), f.token("web")) }).await.expect("the refresh is bounded");
+        let failed = first.err().expect("the refresh gives up");
+        assert!(failed.contains("refreshing the token for `web`") && failed.contains("the browser gave no answer within 10s"), "{failed}");
+        assert_eq!(started.elapsed(), Duration::from_secs(10), "one refresh, bounded by the step timeout");
+        assert_eq!(queued.err().as_deref(), Some(failed.as_str()), "the queued use shares the failure");
+        tokio::time::advance(REFRESH_RETRY_AFTER - Duration::from_millis(1)).await;
+        assert_eq!(f.token("web").await.err().as_deref(), Some(failed.as_str()), "the failure answers within its cooldown");
+        assert_eq!(f.browser.opens(), 2, "one sign-in and one refresh");
+        f
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_whose_browser_does_not_open_gives_up_and_closes_it_when_it_opens() {
+        let f = a_refresh_hung_at(&[Hang::Open]).await;
+        assert_eq!(f.browser.opened(), 1, "only the sign-in's browser has opened");
+        f.browser.assert_each_closed_once().await;
+        let closed = f.browser.closing.notified();
+        f.browser.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(60), closed).await.expect("the late browser is closed");
+        assert_eq!(f.browser.opened(), 2);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_whose_token_url_does_not_commit_gives_up_and_closes_its_browser() {
+        let f = a_refresh_hung_at(&[Hang::Commit]).await;
+        assert_eq!(f.browser.evals(), 1, "no token was read");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_whose_storage_state_does_not_answer_gives_up_and_closes_its_browser() {
+        let f = a_refresh_hung_at(&[Hang::Storage]).await;
+        assert_eq!(f.browser.evals(), 2, "the token was read before the storage state hung");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_whose_close_hangs_answers_its_queued_uses_at_the_step_timeout() {
+        let f = a_refresh_hung_at(&[Hang::Storage, Hang::Close]).await;
+        f.browser.assert_each_closed_once().await;
+    }
+
+    fn flow_state(engine: &Engine) -> FlowState {
+        FlowState { vars: engine.vars(0), sessions: HashMap::new(), flow_id: "flow".into(), attempt: 1, started: chrono::Utc::now(), signing_in: vec![], close_timeout: engine.opts.timeout }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn browser_uses_do_not_wait_for_a_refresh_in_flight() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("0s", gated(1, &entered, &gate, token));
+        f.token("web").await.expect("signs in");
+        let (refreshed, ()) = tokio::join!(f.token("web"), async {
+            entered.notified().await;
+            let browser_uses = async {
+                f.engine.new_flow_session("web", &[]).await.expect("a browser signed in as `web`").close().await.expect("closes");
+                let cookies = f.engine.browser_cookies(&flow_state(&f.engine), Some("web"), "http://app.test/api/x").await.expect("the kept sign-in's cookies");
+                assert_eq!(cookies.as_deref(), Some("sid=s1"));
+                f.engine.open_session(Some("web")).await.expect("an exploring browser signed in as `web`").close().await.expect("closes");
+            };
+            tokio::time::timeout(Duration::from_secs(1), browser_uses).await.expect("browser uses don't wait for the refresh");
+            gate.notify_one();
+        });
+        assert_eq!(bearer(&refreshed).as_deref(), Some("Bearer t1"));
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn browser_uses_keep_the_sign_in_through_a_refresh_cooldown() {
+        let f = refreshing("0s", |n| if n == 1 { stalled(n) } else { token(n) });
+        f.token("web").await.expect("signs in");
+        let failed = f.token("web").await.err().expect("the refresh fails");
+        let session = f.engine.new_flow_session("web", &[]).await.expect("a browser signed in as `web`");
+        session.close().await.expect("closes");
+        let cookies = f.engine.browser_cookies(&flow_state(&f.engine), Some("web"), "http://app.test/api/x").await.expect("the kept sign-in's cookies");
+        assert_eq!(cookies.as_deref(), Some("sid=s1"));
+        f.engine.open_session(Some("web")).await.expect("an exploring browser signed in as `web`").close().await.expect("closes");
+        assert_eq!(f.browser.evals(), 2, "no use refreshed the token");
+        assert_eq!(f.token("web").await.err().as_deref(), Some(failed.as_str()), "uses that need the token still fail within the cooldown");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    const AS_WEB: &str = "1. **Open the app as web**\n   ```browser\n   as: web\n   steps:\n     - goto: http://app.test/\n   ```\n";
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_that_signs_in_as_its_own_profile_fails_without_opening_a_browser() {
+        let f = fixture(Setup { refresh: "0s", login: Some(AS_WEB), ..Setup::default() }, token);
+        let failed = tokio::time::timeout(Duration::from_secs(60), f.token("web")).await.expect("no wait").err().expect("the login is refused");
+        assert!(failed.contains("its login signs in as itself (web → web)"), "{failed}");
+        assert_eq!(f.browser.opens(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_whose_used_fragment_signs_in_as_its_profile_fails() {
+        let f = fixture(Setup { refresh: "0s", login: Some("1. **Sign in**\n   ```use\n   as-web\n   ```\n"), fragments: &[("as-web", AS_WEB)], ..Setup::default() }, token);
+        let failed = f.token("web").await.err().expect("the login is refused");
+        assert!(failed.contains("(web → web)"), "{failed}");
+        assert_eq!(f.browser.opens(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn logins_that_sign_in_as_each_other_fail_at_once_even_when_started_together() {
+        let f = fixture(
+            Setup {
+                refresh: "0s",
+                login: Some("1. **Open the admin app**\n   ```browser\n   as: admin\n   steps:\n     - goto: http://app.test/admin\n   ```\n"),
+                config: "[auth.admin]\ntype = \"browser\"\nlogin = \"admin-sign-in\"",
+                fragments: &[("admin-sign-in", "1. **Read who web is**\n   ```http\n   GET: http://app.test/api/me\n   auth: web\n   ```\n")],
+                ..Setup::default()
+            },
+            token,
+        );
+        let (web, admin) = tokio::time::timeout(Duration::from_secs(60), async { tokio::join!(f.token("web"), f.token("admin")) }).await.expect("neither waits for the other");
+        let (web, admin) = (web.err().expect("web is refused"), admin.err().expect("admin is refused"));
+        assert!(web.contains("(web → admin → web)"), "{web}");
+        assert!(admin.contains("(admin → web → admin)"), "{admin}");
+        assert_eq!(f.browser.opens(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_that_signs_in_as_its_own_profile_through_a_template_fails() {
+        let f = fixture(
+            Setup {
+                refresh: "0s",
+                params: r#"params = { who = "web" }"#,
+                login: Some("1. **Open the app as whoever**\n   ```browser\n   as: \"{{who}}\"\n   steps:\n     - goto: http://app.test/\n   ```\n"),
+                ..Setup::default()
+            },
+            token,
+        );
+        let failed = tokio::time::timeout(Duration::from_secs(60), f.token("web")).await.expect("no wait").err().expect("the login is refused");
+        assert!(failed.contains("login step \"Open the app as whoever\" failed") && failed.contains("its login signs in as itself (web → web)"), "{failed}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    const OPEN_SIGN_IN_THEN_AS_WHO: &str = "1. **Open the sign-in page**\n   ```browser\n   - goto: http://app.test/login\n   ```\n\n2. **Open the app as whoever**\n   ```browser\n   as: \"{{who}}\"\n   steps:\n     - goto: http://app.test/\n   ```\n";
+
+    #[tokio::test(start_paused = true)]
+    async fn logins_that_sign_in_as_each_other_through_templates_fail_at_once_naming_the_chain() {
+        let f = fixture(
+            Setup {
+                refresh: "0s",
+                params: r#"params = { who = "admin" }"#,
+                logins_meet: 2,
+                latency: Duration::from_secs(1),
+                login: Some(OPEN_SIGN_IN_THEN_AS_WHO),
+                config: "[auth.admin]\ntype = \"browser\"\nlogin = \"admin-sign-in\"\nparams = { who = \"web\" }",
+                fragments: &[("admin-sign-in", OPEN_SIGN_IN_THEN_AS_WHO)],
+                ..Setup::default()
+            },
+            token,
+        );
+        let started = tokio::time::Instant::now();
+        let (web, admin) = tokio::time::timeout(Duration::from_secs(600), async { tokio::join!(f.token("web"), f.token("admin")) }).await.expect("neither waits forever");
+        let (web, admin) = (web.err().expect("web fails"), admin.err().expect("admin fails"));
+        for failed in [&web, &admin] {
+            assert!(failed.contains("its login signs in as itself (web → admin → web)"), "{failed}");
+        }
+        assert_eq!(started.elapsed(), Duration::from_secs(1), "refused as soon as both logins reach their `as:` step");
+        assert_eq!(f.browser.opened(), 2, "one login browser each");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_that_names_its_own_profile_as_a_number_fails_without_opening_a_browser() {
+        let f = fixture(
+            Setup {
+                refresh: "0s",
+                login: Some("1. **Open the app as 7**\n   ```browser\n   as: 7\n   steps:\n     - goto: http://app.test/\n   ```\n"),
+                config: "[auth.7]\ntype = \"browser\"\nlogin = \"sign-in\"",
+                ..Setup::default()
+            },
+            token,
+        );
+        let failed = f.token("7").await.err().expect("the login is refused");
+        assert!(failed.contains("(7 → 7)"), "{failed}");
+        assert_eq!(f.browser.opens(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn first_uses_of_both_kinds_share_one_sign_in() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("60s", gated(0, &entered, &gate, token));
+        let uses = async {
+            tokio::join!(f.engine.new_flow_session("web", &[]), f.token("web"), async {
+                entered.notified().await;
+                gate.notify_one();
+            })
+        };
+        let (browser_use, token_use, ()) = tokio::time::timeout(Duration::from_secs(60), uses).await.expect("both are answered");
+        assert_eq!(bearer(&token_use).as_deref(), Some("Bearer t0"));
+        browser_use.expect("a browser signed in as `web`").close().await.expect("closes");
+        assert_eq!((f.browser.evals(), f.browser.opened()), (1, 2), "one sign-in, then the flow's browser");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_sign_in_answers_both_kinds_for_the_rest_of_the_run() {
+        let f = fixture(Setup { refresh: "0s", login_fails: true, ..Setup::default() }, token);
+        let failed = f.token("web").await.err().expect("the login fails");
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        assert_eq!(f.token("web").await.err().as_deref(), Some(failed.as_str()));
+        let browser = f.engine.new_flow_session("web", &[]).await.err().expect("no browser without a sign-in").to_string();
+        assert!(browser.contains(&failed), "{browser}");
+        assert_eq!(f.browser.opens(), 1, "the sign-in is not tried again");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fresh_token_is_kept_for_both_kinds() {
+        let f = refreshing("60s", token);
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t0"));
+        tokio::time::advance(Duration::from_secs(59)).await;
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t0"));
+        f.engine.new_flow_session("web", &[]).await.expect("a browser signed in as `web`").close().await.expect("closes");
+        assert_eq!(f.browser.evals(), 1, "nothing was refreshed");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sign_in_whose_browser_stops_answering_gives_up_for_every_use_waiting_on_it() {
+        let f = fixture(Setup { refresh: "60s", hangs: &[Hang::SignInUrl], ..Setup::default() }, token);
+        let started = tokio::time::Instant::now();
+        let uses = async { tokio::join!(f.token("web"), f.engine.new_flow_session("web", &[])) };
+        let (token_use, browser_use) = tokio::time::timeout(Duration::from_secs(600), uses).await.expect("the sign-in is bounded");
+        assert_eq!(started.elapsed(), Duration::from_secs(60), "six step timeouts");
+        let failed = token_use.err().expect("the sign-in gives up");
+        assert!(failed.contains("signing in gave no answer within 60s"), "{failed}");
+        let browser = browser_use.err().expect("the browser use gets the same failure").to_string();
+        assert!(browser.contains(&failed), "{browser}");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    /// Poll `waiting` once, so it is queued on the attempt in flight.
+    async fn queue<T>(waiting: &mut Pin<Box<impl Future<Output = T>>>) {
+        tokio::select! {
+            biased;
+            _ = waiting.as_mut() => panic!("it should wait on the attempt in flight"),
+            () = std::future::ready(()) => {}
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_refresh_is_tried_again_by_a_use_waiting_on_it() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("0s", gated(1, &entered, &gate, token));
+        f.token("web").await.expect("signs in");
+        let mut leading = Box::pin(f.token("web"));
+        tokio::select! {
+            _ = leading.as_mut() => panic!("the refresh is held at its token read"),
+            () = entered.notified() => {}
+        }
+        let mut waiting = Box::pin(f.token("web"));
+        queue(&mut waiting).await;
+        drop(leading);
+        let refreshed = tokio::time::timeout(Duration::from_secs(60), waiting).await.expect("the waiting use is answered");
+        assert_eq!(bearer(&refreshed).as_deref(), Some("Bearer t2"));
+        assert_eq!(f.browser.opened(), 3, "the sign-in, the dropped refresh and the new one");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_sign_in_is_tried_again_by_a_use_waiting_on_it() {
+        let (entered, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let f = refreshing("60s", gated(0, &entered, &gate, token));
+        let mut leading = Box::pin(f.token("web"));
+        tokio::select! {
+            _ = leading.as_mut() => panic!("the sign-in is held at its token read"),
+            () = entered.notified() => {}
+        }
+        let mut waiting = Box::pin(f.engine.new_flow_session("web", &[]));
+        queue(&mut waiting).await;
+        drop(leading);
+        let browser = tokio::time::timeout(Duration::from_secs(60), waiting).await.expect("the waiting use is answered");
+        browser.expect("a browser signed in as `web`").close().await.expect("closes");
+        assert_eq!(bearer(&f.token("web").await).as_deref(), Some("Bearer t1"), "the sign-in it ran is kept");
+        assert_eq!(f.browser.opened(), 3, "the dropped sign-in, the new one and the flow's browser");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refresh_whose_token_read_hangs_after_a_slow_commit_says_so() {
+        let f = fixture(Setup { refresh: "0s", latency: Duration::from_secs(1), ..Setup::default() }, |n| if n == 0 { token(n) } else { Box::pin(std::future::pending()) });
+        f.token("web").await.expect("signs in");
+        let started = tokio::time::Instant::now();
+        let failed = tokio::time::timeout(Duration::from_secs(600), f.token("web")).await.expect("bounded").err().expect("the token read gives up");
+        assert!(failed.contains("fetching token from http://app.test/api/session gave no answer within 9s"), "{failed}");
+        assert_eq!(started.elapsed(), Duration::from_secs(10), "the refresh's one step timeout");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sign_in_whose_storage_state_hangs_after_a_slow_login_says_so() {
+        let f = fixture(Setup { refresh: "0s", latency: Duration::from_secs(55), hangs: &[Hang::SignInStorage], ..Setup::default() }, token);
+        let started = tokio::time::Instant::now();
+        let failed = tokio::time::timeout(Duration::from_secs(600), f.token("web")).await.expect("bounded").err().expect("the sign-in gives up");
+        assert!(failed.contains("reading the signed-in browser's state gave no answer within 5s"), "{failed}");
+        assert_eq!(started.elapsed(), Duration::from_secs(60), "what was left of the sign-in's six step timeouts");
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sign_in_whose_browser_does_not_open_gives_up_and_closes_it_when_it_opens() {
+        let f = fixture(Setup { refresh: "60s", hangs: &[Hang::OpenWithoutStorage], ..Setup::default() }, token);
+        let started = tokio::time::Instant::now();
+        let failed = tokio::time::timeout(Duration::from_secs(600), f.token("web")).await.expect("bounded").err().expect("the sign-in gives up");
+        assert!(failed.contains("signing in gave no answer within 60s"), "{failed}");
+        assert_eq!(started.elapsed(), Duration::from_secs(60));
+        assert_eq!(f.browser.opened(), 0);
+        let closed = f.browser.closing.notified();
+        f.browser.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(60), closed).await.expect("the late browser is closed");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_flow_browser_that_opens_after_its_use_was_dropped_is_closed() {
+        let f = fixture(Setup { refresh: "60s", hangs: &[Hang::OpenWithoutStorage], ..Setup::default() }, token);
+        tokio::time::timeout(Duration::from_secs(1), f.engine.new_flow_session("", &[])).await.err().expect("the use is dropped while its browser opens");
+        let closed = f.browser.closing.notified();
+        f.browser.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(60), closed).await.expect("the late browser is closed");
+        assert_eq!(f.browser.opened(), 1);
+        f.browser.assert_each_closed_once().await;
     }
 }

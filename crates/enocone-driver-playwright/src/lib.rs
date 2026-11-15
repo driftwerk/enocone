@@ -4,14 +4,14 @@
 //! and label locators, actionability checks and browser support come from
 //! Playwright itself.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use enocone_engine::driver::{Driver, NetRequest, Session, SessionOptions, UiAction, UiQuery};
 use enocone_spec::blocks::{By, Locator};
-use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport};
+use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport, WaitUntil};
 use playwright_rs::server::channel_owner::ChannelOwner;
 use playwright_rs::{LaunchOptions, Playwright};
 use serde_json::Value;
@@ -74,7 +74,7 @@ impl Driver for PlaywrightDriver {
             async move {
                 let kind = msg.type_().to_string();
                 if kind == "error" || kind == "warning" {
-                    sink.lock().unwrap().push(format!("{kind}: {}", msg.text()));
+                    locked(&sink).push(format!("{kind}: {}", msg.text()));
                 }
                 Ok(())
             }
@@ -85,7 +85,7 @@ impl Driver for PlaywrightDriver {
         ctx.on_request(move |r| {
             let sink = Arc::clone(&sink);
             async move {
-                sink.lock().unwrap().push((r.guid().to_string(), NetRequest { method: r.method().to_string(), url: r.url().to_string(), status: None, done: false }));
+                locked(&sink).push((r.guid().to_string(), NetRequest { method: r.method().to_string(), url: r.url().to_string(), status: None, done: false }));
                 Ok(())
             }
         })
@@ -96,7 +96,7 @@ impl Driver for PlaywrightDriver {
                 let sink = Arc::clone(&sink);
                 async move {
                     let status = if failed { None } else { r.existing_response().map(|resp| resp.status()) };
-                    if let Some((_, n)) = sink.lock().unwrap().iter_mut().find(|(g, _)| g == r.guid()) {
+                    if let Some((_, n)) = locked(&sink).iter_mut().find(|(g, _)| g == r.guid()) {
                         n.status = status;
                         n.done = true;
                     }
@@ -135,23 +135,48 @@ fn q(text: &str, exact: bool) -> String {
 }
 
 fn json_q(text: &str, exact: bool) -> String {
-    format!("{}{}", serde_json::to_string(text).unwrap(), if exact { "s" } else { "i" })
+    format!("{}{}", Value::String(text.to_string()), if exact { "s" } else { "i" })
 }
 
-/// The Playwright selector for one `By` (without scope).
-pub fn selector(by: &By) -> Option<String> {
-    Some(match by {
-        By::Role { role, name, exact } => match name {
+/// A lock's contents, also after a panic elsewhere while it was held: every
+/// lock here guards a plain list or number that is never left half-written.
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What one `By` (without scope) finds on a page.
+enum Target<'a> {
+    /// One Playwright selector.
+    Selector(String),
+    /// A button or a link with this name.
+    Clickable(&'a str),
+    /// The scope itself, or the whole page.
+    Page,
+}
+
+fn target(by: &By) -> Target<'_> {
+    match by {
+        By::Role { role, name, exact } => Target::Selector(match name {
             Some(n) => format!("internal:role={role}[name={}]", q(n, *exact)),
             None => format!("internal:role={role}"),
-        },
-        By::Label { text, exact } => format!("internal:label={}", json_q(text, *exact)),
-        By::Text { text, exact } => format!("internal:text={}", json_q(text, *exact)),
-        By::Placeholder(p) => format!("internal:attr=[placeholder={}]", json_q(p, false)),
-        By::TestId(t) => format!("internal:testid=[data-testid={}]", json_q(t, true)),
-        By::Css(c) => c.clone(),
-        By::Clickable(_) | By::Page => return None,
-    })
+        }),
+        By::Label { text, exact } => Target::Selector(format!("internal:label={}", json_q(text, *exact))),
+        By::Text { text, exact } => Target::Selector(format!("internal:text={}", json_q(text, *exact))),
+        By::Placeholder(p) => Target::Selector(format!("internal:attr=[placeholder={}]", json_q(p, false))),
+        By::TestId(t) => Target::Selector(format!("internal:testid=[data-testid={}]", json_q(t, true))),
+        By::Css(c) => Target::Selector(c.clone()),
+        By::Clickable(name) => Target::Clickable(name),
+        By::Page => Target::Page,
+    }
+}
+
+/// The Playwright selector for one `By` (without scope): none for
+/// `Clickable` (a button or a link) and `Page`, which aren't one selector.
+pub fn selector(by: &By) -> Option<String> {
+    match target(by) {
+        Target::Selector(sel) => Some(sel),
+        Target::Clickable(_) | Target::Page => None,
+    }
 }
 
 impl PwSession {
@@ -161,14 +186,14 @@ impl PwSession {
             Some(s) => s.locator(sel),
             None => self.page.locator(sel),
         };
-        let mut l = match &loc.by {
-            By::Page => scope.clone().unwrap_or_else(|| self.page.locator("html")),
-            By::Clickable(name) => {
+        let mut l = match target(&loc.by) {
+            Target::Selector(sel) => child(sel),
+            Target::Clickable(name) => {
                 let button = child(format!("internal:role=button[name={}]", q(name, false)));
                 let link = child(format!("internal:role=link[name={}]", q(name, false)));
                 button.or_(&link).first()
             }
-            other => child(selector(other).expect("selector")),
+            Target::Page => scope.clone().unwrap_or_else(|| self.page.locator("html")),
         };
         if let Some(n) = loc.nth {
             l = if n < 0 { l.last() } else { l.nth(n) };
@@ -179,7 +204,7 @@ impl PwSession {
     async fn set_timeout(&self, t: Duration) {
         let ms = t.as_millis() as f64;
         let changed = {
-            let mut cur = self.timeout_ms.lock().unwrap();
+            let mut cur = locked(&self.timeout_ms);
             let c = *cur != ms;
             *cur = ms;
             c
@@ -201,6 +226,11 @@ fn clean(e: playwright_rs::Error) -> anyhow::Error {
 impl Session for PwSession {
     async fn goto(&self, url: &str, timeout: Duration) -> anyhow::Result<()> {
         self.page.goto(url, GotoOptions::new().timeout(timeout)).await.map_err(clean)?;
+        Ok(())
+    }
+
+    async fn goto_committed(&self, url: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.page.goto(url, GotoOptions::new().timeout(timeout).wait_until(WaitUntil::Commit)).await.map_err(clean)?;
         Ok(())
     }
 
@@ -289,15 +319,15 @@ impl Session for PwSession {
     }
 
     async fn take_console(&self) -> Vec<String> {
-        std::mem::take(&mut *self.console.lock().unwrap())
+        std::mem::take(&mut *locked(&self.console))
     }
 
     async fn requests(&self) -> Vec<NetRequest> {
-        self.requests.lock().unwrap().iter().map(|(_, n)| n.clone()).collect()
+        locked(&self.requests).iter().map(|(_, n)| n.clone()).collect()
     }
 
     async fn clear_requests(&self) {
-        self.requests.lock().unwrap().clear();
+        locked(&self.requests).clear();
     }
 
     async fn close(&self) -> anyhow::Result<()> {
@@ -355,4 +385,29 @@ pub async fn install_browsers(names: &[String], with_deps: bool) -> anyhow::Resu
         playwright_rs::install_browsers(sel).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_quoted_text_is_escaped_as_json() {
+        assert_eq!(json_q("say \"hi\"\n", true), r#""say \"hi\"\n"s"#);
+        assert_eq!(json_q("Save", false), r#""Save"i"#);
+    }
+
+    #[test]
+    fn a_poisoned_lock_still_gives_its_contents() {
+        let m = Arc::new(Mutex::new(vec![1]));
+        let poisoner = Arc::clone(&m);
+        let _ = std::thread::spawn(move || {
+            let _held = poisoner.lock();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(m.is_poisoned());
+        locked(&m).push(2);
+        assert_eq!(*locked(&m), [1, 2]);
+    }
 }

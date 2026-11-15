@@ -118,7 +118,35 @@ token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken", refresh 
 ```
 
 `refresh` re-reads a short-lived access token from the saved browser session
-when it gets that old, so long suites keep working.
+when it gets that old, so long suites keep working. A refresh opens the token
+URL in a browser and then fetches it from that page, so the URL is requested
+twice per refresh: keep that in mind if it has side effects or a rate limit.
+A refresh gives up after the step timeout (`[run] timeout`), and a sign-in
+(the whole login fragment) after six step timeouts; a sign-in that a login
+runs for another profile counts against that login's six too. Every use
+waiting on one gets its outcome and none of them starts another, unless the
+attempt is cancelled, when one of them starts it again.
+
+Uses that need only the saved sign-in (browser blocks with `as:`, http
+blocks with `session: browser` and `auth:`, and browser sessions opened
+through the MCP server to explore) take the last good sign-in at once: they
+never wait for a refresh in progress and never refresh the token themselves.
+Only before the profile's first sign-in do they wait, for that sign-in.
+A sign-in that fails answers every use of the profile for the rest of the run.
+
+A refresh that fails keeps the saved sign-in. For the next 30 seconds, the
+uses of that profile that need its token fail with the refresh's error:
+http blocks with `auth:`, including ones tried through the MCP server. The
+uses that need only the saved sign-in keep working. After the 30 seconds,
+the next use that needs the token tries again.
+
+A login fragment must not sign in as its own profile, directly or through
+other profiles' logins (for example `as: staff` or `auth: staff` inside
+staff's own login): enocone refuses such a sign-in instead of waiting forever.
+Profile names filled in from templates are checked as each one is used: a
+login that would sign in as a profile whose login is under way and waiting,
+directly or through other logins, on it fails at once with an error naming
+the chain of profiles, also when two flows start the loop from opposite ends.
 
 ## Tables of examples
 
