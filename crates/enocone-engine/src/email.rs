@@ -130,12 +130,15 @@ pub async fn run_email(http: &reqwest::Client, mailbox: &Mailbox, spec: &EmailSp
     };
 
     // A mailbox can list a message a moment before it serves its details:
-    // "not found" then means "not ready yet", until the step's time runs out.
+    // "not found", or Postmark's details with both bodies still blank, then
+    // means "not ready yet", until the step's time runs out.
     let (text, html) = match &found.inline {
         Some(b) => b.clone(),
         None => loop {
             match body(http, mailbox, &found.id).await {
-                Ok(b) => break b,
+                Ok(b) if !body_pending(mailbox.provider, &b) => break b,
+                Ok(_) if started.elapsed() < within => tokio::time::sleep(Duration::from_millis(500)).await,
+                Ok(_) => return fail(record, format!("message {} was listed, but its body stayed empty for {}s", found.id, within.as_secs())),
                 Err(e) if e.not_found() && started.elapsed() < within => tokio::time::sleep(Duration::from_millis(500)).await,
                 Err(e) if e.not_found() => {
                     return fail(record, format!("message {} was listed but never readable within {}s: {e}", found.id, within.as_secs()));
@@ -207,6 +210,12 @@ fn parse_time(v: &Value) -> Option<DateTime<Utc>> {
 /// Was this message sent after the flow started (allowing for clock skew)?
 fn is_fresh(received: Option<DateTime<Utc>>, since: DateTime<Utc>) -> bool {
     received.is_none_or(|t| t + CLOCK_SLACK >= since)
+}
+
+/// Postmark can answer a listed message's details before it has filled in its
+/// bodies: both blank means the details aren't ready yet.
+fn body_pending(provider: Provider, (text, html): &(String, String)) -> bool {
+    provider == Provider::Postmark && text.trim().is_empty() && html.trim().is_empty()
 }
 
 fn plural(n: usize) -> String {
@@ -478,7 +487,8 @@ mod tests {
 
     /// A Postmark stand-in that lists one message, whose details answer
     /// `detail_status` for the first `misses` reads (and every read when
-    /// `misses` is `usize::MAX`), then the message.
+    /// `misses` is `usize::MAX`), then the message. A `detail_status` of 200
+    /// answers those reads with both bodies empty, then with an HTML-only body.
     async fn mailbox(misses: usize, detail_status: u16) -> (Mailbox, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -494,7 +504,10 @@ mod tests {
                 get(move || {
                     let n = r2.fetch_add(1, Ordering::SeqCst);
                     async move {
-                        if n < misses {
+                        if detail_status == 200 {
+                            let html = if n < misses { "" } else { r#"<a href="https://x.test/pay/1">Pay Now</a>"# };
+                            Json(serde_json::json!({ "TextBody": "", "HtmlBody": html })).into_response()
+                        } else if n < misses {
                             let code = if detail_status == 422 { 701 } else { 0 };
                             (StatusCode::from_u16(detail_status).unwrap(), Json(serde_json::json!({ "ErrorCode": code, "Message": "This message was not found." }))).into_response()
                         } else {
@@ -528,6 +541,26 @@ mod tests {
         let out = run_email(&reqwest::Client::new(), &mb, &spec(1200), Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
         let e = out.error.expect("fails").message;
         assert!(e.contains("message m1 was listed but never readable within 1s"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn a_listed_message_is_read_once_its_body_is_filled() {
+        let (mb, reads) = mailbox(2, 200).await;
+        let spec = EmailSpec { capture: vec![("pay".into(), EmailCapture::Link("/pay/".into()))], ..spec(5000) };
+        let out = run_email(&reqwest::Client::new(), &mb, &spec, Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert!(out.record.text.contains("Pay Now"), "{}", out.record.text);
+        assert_eq!(out.record.links, vec!["https://x.test/pay/1"]);
+        assert_eq!(out.captured, vec![("pay".to_string(), Value::String("https://x.test/pay/1".into()))]);
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_body_that_stays_empty_fails_when_time_runs_out() {
+        let (mb, _) = mailbox(usize::MAX, 200).await;
+        let out = run_email(&reqwest::Client::new(), &mb, &spec(1200), Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await;
+        let e = out.error.expect("fails").message;
+        assert!(e.contains("message m1 was listed, but its body stayed empty for 1s"), "{e}");
     }
 
     #[tokio::test]
