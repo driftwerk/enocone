@@ -1,5 +1,6 @@
 //! The enocone engine: runs flow documents against a live system.
 
+mod auth;
 pub mod browser;
 pub mod config;
 pub mod driver;

@@ -121,22 +121,32 @@ token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken", refresh 
 when it gets that old, so long suites keep working. A refresh opens the token
 URL in a browser and then fetches it from that page, so the URL is requested
 twice per refresh: keep that in mind if it has side effects or a rate limit.
-A refresh gives up after the step timeout (`[run] timeout`).
+A refresh gives up after the step timeout (`[run] timeout`), and a sign-in
+(the whole login fragment) after six step timeouts. Every use waiting on one
+gets its outcome; none of them starts another.
+
+Uses that need only the saved sign-in (browser blocks with `as:`, http
+blocks with `session: browser` and `auth:`, and browser sessions opened
+through the MCP server to explore) take the last good sign-in at once: they
+never wait for a refresh in progress and never refresh the token themselves.
+Only before the profile's first sign-in do they wait, for that sign-in.
+A sign-in that fails answers every use of the profile for the rest of the run.
 
 A refresh that fails keeps the saved sign-in. For the next 30 seconds, the
 uses of that profile that need its token fail with the refresh's error:
-http blocks with `auth:`, including ones tried through the MCP server.
-Uses that need only the saved sign-in keep working: browser blocks with `as:`,
-http blocks with `session: browser` and `auth:`, and browser sessions opened
-through the MCP server to explore. After the 30 seconds, the next use that
-needs the token tries again.
+http blocks with `auth:`, including ones tried through the MCP server. The
+uses that need only the saved sign-in keep working. After the 30 seconds,
+the next use that needs the token tries again.
 
 A login fragment must not sign in as its own profile, directly or through
 other profiles' logins (for example `as: staff` or `auth: staff` inside
 staff's own login): enocone refuses such a sign-in instead of waiting forever.
-Profile names filled in from templates are checked only as each one is used,
-which catches a loop within one flow but not one that two flows start at once
-from opposite ends, so name the profiles a login signs in as literally.
+Profile names filled in from templates are checked only as each one is used.
+That catches a loop within one flow at once. When two flows start one from
+opposite ends, a login that waits for another profile's sign-in already under
+way elsewhere gives up after six step timeouts, failing with an error that
+names the chain of profiles. Name the profiles a login signs in as literally
+to have every loop refused at once.
 
 ## Tables of examples
 
