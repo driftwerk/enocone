@@ -122,8 +122,10 @@ when it gets that old, so long suites keep working. A refresh opens the token
 URL in a browser and then fetches it from that page, so the URL is requested
 twice per refresh: keep that in mind if it has side effects or a rate limit.
 A refresh gives up after the step timeout (`[run] timeout`), and a sign-in
-(the whole login fragment) after six step timeouts. Every use waiting on one
-gets its outcome; none of them starts another.
+(the whole login fragment) after six step timeouts; a sign-in that a login
+runs for another profile counts against that login's six too. Every use
+waiting on one gets its outcome and none of them starts another, unless the
+attempt is cancelled, when one of them starts it again.
 
 Uses that need only the saved sign-in (browser blocks with `as:`, http
 blocks with `session: browser` and `auth:`, and browser sessions opened
@@ -141,12 +143,10 @@ the next use that needs the token tries again.
 A login fragment must not sign in as its own profile, directly or through
 other profiles' logins (for example `as: staff` or `auth: staff` inside
 staff's own login): enocone refuses such a sign-in instead of waiting forever.
-Profile names filled in from templates are checked only as each one is used.
-That catches a loop within one flow at once. When two flows start one from
-opposite ends, a login that waits for another profile's sign-in already under
-way elsewhere gives up after six step timeouts, failing with an error that
-names the chain of profiles. Name the profiles a login signs in as literally
-to have every loop refused at once.
+Profile names filled in from templates are checked as each one is used: a
+login that would sign in as a profile whose login is under way and waiting,
+directly or through other logins, on it fails at once with an error naming
+the chain of profiles, also when two flows start the loop from opposite ends.
 
 ## Tables of examples
 

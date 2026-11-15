@@ -19,8 +19,11 @@
 //! one. A good attempt leaves `SignedIn`, clearing any earlier failure.
 //!
 //! Attempts are bounded by their runner: a refresh by the step timeout, a
-//! sign-in by `SIGN_IN_STEPS` step timeouts. A use made from inside another
-//! profile's login waits on an attempt at most as long as a sign-in may take.
+//! sign-in by `SIGN_IN_STEPS` step timeouts, so every wait on one ends. A
+//! sign-in run inside another profile's login counts against that login's
+//! budget too. A use made from inside a login that would wait on an attempt
+//! itself waiting, directly or through other logins, on that login is
+//! refused at once, naming the chain.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -43,8 +46,7 @@ pub(crate) struct AuthState {
 /// before the next one tries again.
 pub(crate) const REFRESH_RETRY_AFTER: Duration = Duration::from_secs(30);
 
-/// How many step timeouts a sign-in may take as a whole, and so how long a
-/// use made from inside another profile's login waits on an attempt.
+/// How many step timeouts a sign-in may take as a whole.
 pub(crate) const SIGN_IN_STEPS: u32 = 6;
 
 /// What a use of an auth profile needs from it.
