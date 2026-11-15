@@ -118,9 +118,25 @@ token = { url = "{{env.WEB}}/api/auth/session", path = "$.accessToken", refresh 
 ```
 
 `refresh` re-reads a short-lived access token from the saved browser session
-when it gets that old, so long suites keep working. A refresh that fails
-keeps the saved sign-in and fails the steps that need the token for the
-next 30 seconds, then the next use tries again.
+when it gets that old, so long suites keep working. A refresh opens the token
+URL in a browser and then fetches it from that page, so the URL is requested
+twice per refresh: keep that in mind if it has side effects or a rate limit.
+A refresh gives up after the step timeout (`[run] timeout`).
+
+A refresh that fails keeps the saved sign-in. For the next 30 seconds, the
+uses of that profile that need its token fail with the refresh's error:
+http blocks with `auth:`, including ones tried through the MCP server.
+Uses that need only the saved sign-in keep working: browser blocks with `as:`,
+http blocks with `session: browser` and `auth:`, and browser sessions opened
+through the MCP server to explore. After the 30 seconds, the next use that
+needs the token tries again.
+
+A login fragment must not sign in as its own profile, directly or through
+other profiles' logins (for example `as: staff` or `auth: staff` inside
+staff's own login): enocone refuses such a sign-in instead of waiting forever.
+Profile names filled in from templates are checked only as each one is used,
+which catches a loop within one flow but not one that two flows start at once
+from opposite ends, so name the profiles a login signs in as literally.
 
 ## Tables of examples
 
