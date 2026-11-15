@@ -138,7 +138,8 @@ fn json_q(text: &str, exact: bool) -> String {
     format!("{}{}", serde_json::to_string(text).unwrap(), if exact { "s" } else { "i" })
 }
 
-/// The Playwright selector for one `By` (without scope).
+/// The Playwright selector for one `By` (without scope): none for
+/// `Clickable` (a button or a link) and `Page`, which aren't one selector.
 pub fn selector(by: &By) -> Option<String> {
     Some(match by {
         By::Role { role, name, exact } => match name {
@@ -161,14 +162,14 @@ impl PwSession {
             Some(s) => s.locator(sel),
             None => self.page.locator(sel),
         };
-        let mut l = match &loc.by {
-            By::Page => scope.clone().unwrap_or_else(|| self.page.locator("html")),
-            By::Clickable(name) => {
+        let mut l = match (selector(&loc.by), &loc.by) {
+            (Some(sel), _) => child(sel),
+            (None, By::Clickable(name)) => {
                 let button = child(format!("internal:role=button[name={}]", q(name, false)));
                 let link = child(format!("internal:role=link[name={}]", q(name, false)));
                 button.or_(&link).first()
             }
-            other => child(selector(other).expect("selector")),
+            (None, _) => scope.clone().unwrap_or_else(|| self.page.locator("html")),
         };
         if let Some(n) = loc.nth {
             l = if n < 0 { l.last() } else { l.nth(n) };
