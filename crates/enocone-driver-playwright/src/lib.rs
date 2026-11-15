@@ -138,21 +138,39 @@ fn json_q(text: &str, exact: bool) -> String {
     format!("{}{}", serde_json::to_string(text).unwrap(), if exact { "s" } else { "i" })
 }
 
+/// What one `By` (without scope) finds on a page.
+enum Target<'a> {
+    /// One Playwright selector.
+    Selector(String),
+    /// A button or a link with this name.
+    Clickable(&'a str),
+    /// The scope itself, or the whole page.
+    Page,
+}
+
+fn target(by: &By) -> Target<'_> {
+    match by {
+        By::Role { role, name, exact } => Target::Selector(match name {
+            Some(n) => format!("internal:role={role}[name={}]", q(n, *exact)),
+            None => format!("internal:role={role}"),
+        }),
+        By::Label { text, exact } => Target::Selector(format!("internal:label={}", json_q(text, *exact))),
+        By::Text { text, exact } => Target::Selector(format!("internal:text={}", json_q(text, *exact))),
+        By::Placeholder(p) => Target::Selector(format!("internal:attr=[placeholder={}]", json_q(p, false))),
+        By::TestId(t) => Target::Selector(format!("internal:testid=[data-testid={}]", json_q(t, true))),
+        By::Css(c) => Target::Selector(c.clone()),
+        By::Clickable(name) => Target::Clickable(name),
+        By::Page => Target::Page,
+    }
+}
+
 /// The Playwright selector for one `By` (without scope): none for
 /// `Clickable` (a button or a link) and `Page`, which aren't one selector.
 pub fn selector(by: &By) -> Option<String> {
-    Some(match by {
-        By::Role { role, name, exact } => match name {
-            Some(n) => format!("internal:role={role}[name={}]", q(n, *exact)),
-            None => format!("internal:role={role}"),
-        },
-        By::Label { text, exact } => format!("internal:label={}", json_q(text, *exact)),
-        By::Text { text, exact } => format!("internal:text={}", json_q(text, *exact)),
-        By::Placeholder(p) => format!("internal:attr=[placeholder={}]", json_q(p, false)),
-        By::TestId(t) => format!("internal:testid=[data-testid={}]", json_q(t, true)),
-        By::Css(c) => c.clone(),
-        By::Clickable(_) | By::Page => return None,
-    })
+    match target(by) {
+        Target::Selector(sel) => Some(sel),
+        Target::Clickable(_) | Target::Page => None,
+    }
 }
 
 impl PwSession {
@@ -162,14 +180,14 @@ impl PwSession {
             Some(s) => s.locator(sel),
             None => self.page.locator(sel),
         };
-        let mut l = match (selector(&loc.by), &loc.by) {
-            (Some(sel), _) => child(sel),
-            (None, By::Clickable(name)) => {
+        let mut l = match target(&loc.by) {
+            Target::Selector(sel) => child(sel),
+            Target::Clickable(name) => {
                 let button = child(format!("internal:role=button[name={}]", q(name, false)));
                 let link = child(format!("internal:role=link[name={}]", q(name, false)));
                 button.or_(&link).first()
             }
-            (None, _) => scope.clone().unwrap_or_else(|| self.page.locator("html")),
+            Target::Page => scope.clone().unwrap_or_else(|| self.page.locator("html")),
         };
         if let Some(n) = loc.nth {
             l = if n < 0 { l.last() } else { l.nth(n) };
