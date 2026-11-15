@@ -51,6 +51,12 @@ pub enum UiQuery {
 #[async_trait]
 pub trait Session: Send + Sync {
     async fn goto(&self, url: &str, timeout: Duration) -> anyhow::Result<()>;
+    /// Navigate, returning once the response is committed instead of waiting
+    /// for the page to load: enough to `eval` on that origin. Drivers that
+    /// can't tell the difference navigate as `goto` does.
+    async fn goto_committed(&self, url: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.goto(url, timeout).await
+    }
     /// Perform an action, waiting up to `timeout` for the element to be actionable.
     async fn act(&self, target: &Locator, action: UiAction, timeout: Duration) -> anyhow::Result<()>;
     /// Press a key on whatever has focus.

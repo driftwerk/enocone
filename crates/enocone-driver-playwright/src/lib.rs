@@ -11,7 +11,7 @@ use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use enocone_engine::driver::{Driver, NetRequest, Session, SessionOptions, UiAction, UiQuery};
 use enocone_spec::blocks::{By, Locator};
-use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport};
+use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport, WaitUntil};
 use playwright_rs::server::channel_owner::ChannelOwner;
 use playwright_rs::{LaunchOptions, Playwright};
 use serde_json::Value;
@@ -201,6 +201,11 @@ fn clean(e: playwright_rs::Error) -> anyhow::Error {
 impl Session for PwSession {
     async fn goto(&self, url: &str, timeout: Duration) -> anyhow::Result<()> {
         self.page.goto(url, GotoOptions::new().timeout(timeout)).await.map_err(clean)?;
+        Ok(())
+    }
+
+    async fn goto_committed(&self, url: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.page.goto(url, GotoOptions::new().timeout(timeout).wait_until(WaitUntil::Commit)).await.map_err(clean)?;
         Ok(())
     }
 
