@@ -100,12 +100,8 @@ flowchart LR
 - **`email` blocks** wait for a message in a sandbox mailbox, check it and
   capture its links. Set the mailbox under `[email]`: a Postmark sandbox
   server, Mailpit or MailHog. Only messages sent after the flow started
-  count. A block reads a message's plain text: Postmark's TextBody,
-  Mailpit's first `text/plain` part outside any attachment, or MailHog's
-  first non-empty top-level `text/plain` part. When that is blank it reads
-  the text of the message's HTML, found the same way. Postmark waits until
-  one of its bodies is filled in, and a MailHog message whose top-level parts
-  give neither is read from its whole body.
+  count. A block checks a message's text, or the text of its HTML when that
+  is blank. Each mailbox's reader is in `crates/enocone-engine/src/email.rs`.
 - **`exec` blocks** run a command and check its exit code, output or JSON.
   This is useful for CLIs and for seeding data. They are off unless
   `[run] allow_exec = true`. Start each with a `# title` saying what it does:
