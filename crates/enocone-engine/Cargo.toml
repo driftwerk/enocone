@@ -10,6 +10,7 @@ enocone-spec.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+mailparse.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true

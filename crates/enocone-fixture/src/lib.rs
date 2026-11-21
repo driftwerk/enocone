@@ -147,7 +147,7 @@ pub fn app() -> Router {
         .route("/postmark/messages/outbound", get(postmark_list))
         .route("/postmark/messages/outbound/{id}/details", get(postmark_details))
         .route("/mailpit/api/v1/search", get(mailpit_search))
-        .route("/mailpit/api/v1/message/{id}", get(mailpit_message))
+        .route("/mailpit/api/v1/message/{id}/raw", get(mailpit_raw))
         .with_state(state)
 }
 
@@ -567,11 +567,21 @@ async fn mailpit_search(State(s): State<S>, Query(q): Query<HashMap<String, Stri
     Json(json!({ "total": messages.len(), "messages_count": messages.len(), "messages": messages })).into_response()
 }
 
-async fn mailpit_message(State(s): State<S>, Path(id): Path<String>) -> Response {
+async fn mailpit_raw(State(s): State<S>, Path(id): Path<String>) -> Response {
     match s.lock().unwrap().emails.iter().find(|e| e.id == id) {
-        Some(e) => Json(json!({ "ID": e.id, "From": { "Address": e.from }, "To": [{ "Address": e.to }], "Subject": e.subject, "Date": e.sent_at, "Text": e.text, "HTML": e.html })).into_response(),
+        Some(e) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], mime_source(e)).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn mime_source(e: &Email) -> String {
+    const BOUNDARY: &str = "enocone-fixture-alternative";
+    let parts: String = [("text/plain", &e.text), ("text/html", &e.html)]
+        .into_iter()
+        .filter(|(_, body)| !body.is_empty())
+        .map(|(ctype, body)| format!("--{BOUNDARY}\r\nContent-Type: {ctype}; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}\r\n"))
+        .collect();
+    format!("From: {}\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"{BOUNDARY}\"\r\n\r\n{parts}--{BOUNDARY}--\r\n", e.from, e.to, e.subject)
 }
 
 // ---------------------------------------------------------------- short-lived tokens
