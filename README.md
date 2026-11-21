@@ -100,14 +100,12 @@ flowchart LR
 - **`email` blocks** wait for a message in a sandbox mailbox, check it and
   capture its links. Set the mailbox under `[email]`: a Postmark sandbox
   server, Mailpit or MailHog. Only messages sent after the flow started
-  count. Postmark checks a message's TextBody; Mailpit its first `text/plain`
-  part that is not an attachment, decoded from its transfer encoding and
-  charset; MailHog its first top-level `text/plain` part, decoding only
-  quoted-printable. When that text is blank, each checks the text of the
-  message's HTML: Postmark's HtmlBody, Mailpit's first `text/html` part that
-  is not an attachment, MailHog's first top-level `text/html` part. When a
-  MailHog message's top-level parts give neither text nor HTML, its whole
-  body is checked instead, as HTML when the message is `text/html`.
+  count. A block reads a message's plain text: Postmark's TextBody,
+  Mailpit's first `text/plain` part outside any attachment, or MailHog's
+  first non-empty top-level `text/plain` part. When that is blank it reads
+  the text of the message's HTML, found the same way. Postmark waits until
+  one of its bodies is filled in, and a MailHog message whose top-level parts
+  give neither is read from its whole body.
 - **`exec` blocks** run a command and check its exit code, output or JSON.
   This is useful for CLIs and for seeding data. They are off unless
   `[run] allow_exec = true`. Start each with a `# title` saying what it does:

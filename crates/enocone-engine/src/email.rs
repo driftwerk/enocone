@@ -365,7 +365,7 @@ async fn body(http: &reqwest::Client, mailbox: &Mailbox, id: &str) -> Result<(St
     }
 }
 
-/// A message's first `text/plain` and `text/html` parts that are not attachments.
+/// The text of a message's first `text/plain` and `text/html` parts outside any attachment, empty when there is none.
 fn mime_bodies(raw: &[u8]) -> Result<(String, String), MailError> {
     let invalid = |e: mailparse::MailParseError| MailError::from(format!("not a MIME message: {e}"));
     let mail = mailparse::parse_mail(raw).map_err(invalid)?;
