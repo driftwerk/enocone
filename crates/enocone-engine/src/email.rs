@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use enocone_spec::blocks::{EmailCapture, EmailSpec};
 use enocone_spec::results::{Check, EmailRecord, StepError};
+use mailparse::{DispositionType, ParsedMail};
 use regex::Regex;
 use serde_json::Value;
 
@@ -69,6 +70,8 @@ pub struct EmailOutcome {
 
 /// Messages a little older than the flow's start still count (clocks differ).
 const CLOCK_SLACK: chrono::TimeDelta = chrono::TimeDelta::seconds(5);
+
+const RAW_LIMIT: usize = 16 * 1024 * 1024;
 
 pub async fn run_email(http: &reqwest::Client, mailbox: &Mailbox, spec: &EmailSpec, since: DateTime<Utc>, masker: &Masker) -> EmailOutcome {
     let started = Instant::now();
@@ -261,8 +264,8 @@ impl From<&str> for MailError {
     }
 }
 
-async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Result<Value, MailError> {
-    let mut req = http.get(url).header("Accept", "application/json");
+async fn get(http: &reqwest::Client, mailbox: &Mailbox, url: &str, accept: &str) -> Result<reqwest::Response, MailError> {
+    let mut req = http.get(url).header("Accept", accept);
     match (mailbox.provider, &mailbox.token) {
         (Provider::Postmark, Some(t)) => req = req.header("X-Postmark-Server-Token", t),
         (Provider::Postmark, None) => return Err("Postmark needs `token` (a sandbox server's API token) under [email]".into()),
@@ -276,11 +279,28 @@ async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Resul
     }
     let resp = req.timeout(Duration::from_secs(15)).send().await.map_err(|e| e.without_url().to_string())?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(MailError { status: Some(status.as_u16()), message: format!("HTTP {status}: {}", shorten(&text, 300)) });
+    if status.is_success() {
+        return Ok(resp);
     }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    Err(MailError { status: Some(status.as_u16()), message: format!("HTTP {status}: {}", shorten(&text, 300)) })
+}
+
+async fn get_json(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Result<Value, MailError> {
+    let text = get(http, mailbox, url, "application/json").await?.text().await.map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| format!("not JSON: {e}").into())
+}
+
+async fn get_raw(http: &reqwest::Client, mailbox: &Mailbox, url: &str) -> Result<Vec<u8>, MailError> {
+    let mut resp = get(http, mailbox, url, "text/plain").await?;
+    let mut raw = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if raw.len() + chunk.len() > RAW_LIMIT {
+            return Err(format!("the message is larger than {} MiB", RAW_LIMIT / (1024 * 1024)).into());
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    Ok(raw)
 }
 
 fn base(mailbox: &Mailbox) -> &str {
@@ -340,11 +360,23 @@ async fn body(http: &reqwest::Client, mailbox: &Mailbox, id: &str) -> Result<(St
             let v = get_json(http, mailbox, &format!("{}/messages/outbound/{}/details", base(mailbox), enc(id))).await?;
             Ok((s(&v["TextBody"]), s(&v["HtmlBody"])))
         }
-        Provider::Mailpit => {
-            let v = get_json(http, mailbox, &format!("{}/api/v1/message/{}", base(mailbox), enc(id))).await?;
-            Ok((s(&v["Text"]), s(&v["HTML"])))
-        }
+        Provider::Mailpit => mime_bodies(&get_raw(http, mailbox, &format!("{}/api/v1/message/{}/raw", base(mailbox), enc(id))).await?),
         Provider::Mailhog => Err("MailHog bodies come with the listing".into()),
+    }
+}
+
+/// A message's first text and HTML parts, as Postmark's TextBody and HtmlBody hold them.
+fn mime_bodies(raw: &[u8]) -> Result<(String, String), MailError> {
+    let invalid = |e: mailparse::MailParseError| MailError::from(format!("not a MIME message: {e}"));
+    let mail = mailparse::parse_mail(raw).map_err(invalid)?;
+    let first = |mimetype: &str| content_parts(&mail).find(|p| p.ctype.mimetype == mimetype).map(ParsedMail::get_body).transpose().map(Option::unwrap_or_default).map_err(invalid);
+    Ok((first("text/plain")?, first("text/html")?))
+}
+
+fn content_parts<'a>(part: &'a ParsedMail<'a>) -> Box<dyn Iterator<Item = &'a ParsedMail<'a>> + 'a> {
+    match part.get_content_disposition().disposition {
+        DispositionType::Attachment => Box::new(std::iter::empty()),
+        _ => Box::new(std::iter::once(part).chain(part.subparts.iter().flat_map(content_parts))),
     }
 }
 
@@ -441,6 +473,65 @@ fn shorten(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{Json, Router, body::Bytes, http::StatusCode, response::IntoResponse, response::Response, routing::MethodRouter, routing::get};
+    use enocone_spec::blocks::{EmailExpect, Matcher};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HTML: &str = "<p><strong>A Firm</strong> - £1.00</p>";
+
+    const HTML_ONLY: &[u8] = concat!(
+        "From: a@x.test\r\n",
+        "To: jane@x.test\r\n",
+        "Subject: Welcome\r\n",
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: multipart/mixed; boundary=\"outer\"\r\n",
+        "\r\n",
+        "--outer\r\n",
+        "Content-Type: text/plain; charset=utf-8\r\n",
+        "Content-Disposition: attachment; filename=\"notes.txt\"\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "\r\n",
+        "Tm90ZXMgZm9yIHRoZSBmaWxl\r\n",
+        "--outer\r\n",
+        "Content-Type: text/html; charset=utf-8\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "\r\n",
+        "PHA+PHN0cm9uZz5BIEZpcm08L3N0cm9uZz4gLSDCozEuMDA8L3A+\r\n",
+        "--outer\r\n",
+        "Content-Type: application/pdf; name=\"quote.pdf\"\r\n",
+        "Content-Disposition: attachment; filename=\"quote.pdf\"\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "\r\n",
+        "JVBERi0xLjQgbm90IHJlYWxseQ==\r\n",
+        "--outer--\r\n",
+    )
+    .as_bytes();
+
+    const TEXT: &str = "Total £1.00 for A Firm";
+    const TEXT_HTML: &str = r#"<p>Total <strong>£1.00</strong> for <a href="https://x.test/pay/1">A Firm</a></p>"#;
+
+    const TEXT_AND_HTML: &[u8] = concat!(
+        "From: a@x.test\r\n",
+        "To: jane@x.test\r\n",
+        "Subject: Welcome\r\n",
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: multipart/alternative; boundary=\"alt\"\r\n",
+        "\r\n",
+        "--alt\r\n",
+        "Content-Type: text/plain; charset=utf-8\r\n",
+        "Content-Transfer-Encoding: quoted-printable\r\n",
+        "\r\n",
+        "Total =C2=A31.00 for A Firm\r\n",
+        "--alt\r\n",
+        "Content-Type: text/html; charset=utf-8\r\n",
+        "\r\n",
+        "<p>Total <strong>£1.00</strong> for <a href=\"https://x.test/pay/1\">A Firm</a></p>\r\n",
+        "--alt--\r\n",
+    )
+    .as_bytes();
+
+    const TEXT_ONLY: &[u8] = concat!("From: a@x.test\r\n", "To: jane@x.test\r\n", "Subject: Welcome\r\n", "Content-Type: text/plain; charset=utf-8\r\n", "\r\n", "Hello Jane").as_bytes();
 
     #[test]
     fn finds_links_and_text() {
@@ -485,41 +576,73 @@ mod tests {
         assert_eq!(mailhog_body(&single).0, "Hi https://x.test/a");
     }
 
+    async fn serve(provider: Provider, app: Router) -> Mailbox {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Mailbox { provider, url: format!("http://{addr}"), token: Some("t".into()) }
+    }
+
+    fn counted(answer: impl Fn(usize) -> Response + Clone + Send + Sync + 'static) -> (MethodRouter, Arc<AtomicUsize>) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seen = reads.clone();
+        let route = get(move || {
+            let answer = answer(seen.fetch_add(1, Ordering::SeqCst));
+            async move { answer }
+        });
+        (route, reads)
+    }
+
+    async fn mailbox_with(provider: Provider, read: MethodRouter) -> Mailbox {
+        let app = match provider {
+            Provider::Postmark => Router::new()
+                .route(
+                    "/messages/outbound",
+                    get(|| async { Json(serde_json::json!({ "Messages": [{ "MessageID": "m1", "Subject": "Welcome", "From": "a@x.test", "ReceivedAt": Utc::now().to_rfc3339() }] })) }),
+                )
+                .route("/messages/outbound/{id}/details", read),
+            Provider::Mailpit => Router::new()
+                .route(
+                    "/api/v1/search",
+                    get(|| async { Json(serde_json::json!({ "messages": [{ "ID": "m1", "Subject": "Welcome", "From": { "Address": "a@x.test" }, "Created": Utc::now().to_rfc3339() }] })) }),
+                )
+                .route("/api/v1/message/{id}/raw", read),
+            Provider::Mailhog => unreachable!("MailHog bodies come with the listing"),
+        };
+        serve(provider, app).await
+    }
+
     /// A Postmark stand-in that lists one message, whose details answer
     /// `detail_status` for the first `misses` reads (and every read when
     /// `misses` is `usize::MAX`), then the message. A `detail_status` of 200
     /// answers those reads with both bodies empty, then with an HTML-only body.
-    async fn mailbox(misses: usize, detail_status: u16) -> (Mailbox, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-        use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let reads = std::sync::Arc::new(AtomicUsize::new(0));
-        let r2 = reads.clone();
-        let app = Router::new()
-            .route(
-                "/messages/outbound",
-                get(|| async { Json(serde_json::json!({ "Messages": [{ "MessageID": "m1", "Subject": "Welcome", "From": "a@x.test", "ReceivedAt": Utc::now().to_rfc3339() }] })) }),
-            )
-            .route(
-                "/messages/outbound/{id}/details",
-                get(move || {
-                    let n = r2.fetch_add(1, Ordering::SeqCst);
-                    async move {
-                        if detail_status == 200 {
-                            let html = if n < misses { "" } else { r#"<a href="https://x.test/pay/1">Pay Now</a>"# };
-                            Json(serde_json::json!({ "TextBody": "", "HtmlBody": html })).into_response()
-                        } else if n < misses {
-                            let code = if detail_status == 422 { 701 } else { 0 };
-                            (StatusCode::from_u16(detail_status).unwrap(), Json(serde_json::json!({ "ErrorCode": code, "Message": "This message was not found." }))).into_response()
-                        } else {
-                            Json(serde_json::json!({ "TextBody": "Hello", "HtmlBody": "" })).into_response()
-                        }
-                    }
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (Mailbox { provider: Provider::Postmark, url: format!("http://{addr}"), token: Some("t".into()) }, reads)
+    async fn mailbox(misses: usize, detail_status: u16) -> (Mailbox, Arc<AtomicUsize>) {
+        let (details, reads) = counted(move |n| {
+            if detail_status == 200 {
+                let html = if n < misses { "" } else { r#"<a href="https://x.test/pay/1">Pay Now</a>"# };
+                Json(serde_json::json!({ "TextBody": "", "HtmlBody": html })).into_response()
+            } else if n < misses {
+                let code = if detail_status == 422 { 701 } else { 0 };
+                (StatusCode::from_u16(detail_status).unwrap(), Json(serde_json::json!({ "ErrorCode": code, "Message": "This message was not found." }))).into_response()
+            } else {
+                Json(serde_json::json!({ "TextBody": "Hello", "HtmlBody": "" })).into_response()
+            }
+        });
+        (mailbox_with(Provider::Postmark, details).await, reads)
+    }
+
+    async fn postmark(text: &'static str, html: &'static str) -> Mailbox {
+        mailbox_with(Provider::Postmark, counted(move |_| Json(serde_json::json!({ "TextBody": text, "HtmlBody": html })).into_response()).0).await
+    }
+
+    async fn mailpit(misses: usize, raw: impl Into<Bytes>) -> (Mailbox, Arc<AtomicUsize>) {
+        let raw = raw.into();
+        let (source, reads) = counted(move |n| if n < misses { StatusCode::NOT_FOUND.into_response() } else { raw.clone().into_response() });
+        (mailbox_with(Provider::Mailpit, source).await, reads)
+    }
+
+    async fn read(mailbox: &Mailbox, spec: &EmailSpec) -> EmailOutcome {
+        run_email(&reqwest::Client::new(), mailbox, spec, Utc::now() - chrono::TimeDelta::seconds(1), &Masker::default()).await
     }
 
     fn spec(within_ms: u64) -> EmailSpec {
@@ -570,5 +693,101 @@ mod tests {
         let e = out.error.expect("fails").message;
         assert!(e.contains("could not read message m1: HTTP 500"), "{e}");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_first_text_and_html_parts_that_are_not_attachments_are_the_bodies() {
+        assert_eq!(mime_bodies(HTML_ONLY).unwrap(), (String::new(), HTML.to_string()));
+        assert_eq!(mime_bodies(TEXT_AND_HTML).unwrap(), (TEXT.to_string(), TEXT_HTML.to_string()));
+        assert_eq!(mime_bodies(TEXT_ONLY).unwrap(), ("Hello Jane".to_string(), String::new()));
+    }
+
+    #[test]
+    fn nested_parts_are_found_and_their_charset_decoded() {
+        let raw = concat!(
+            "Content-Type: multipart/mixed; boundary=\"outer\"\r\n",
+            "\r\n",
+            "--outer\r\n",
+            "Content-Type: multipart/alternative; boundary=\"inner\"\r\n",
+            "\r\n",
+            "--inner\r\n",
+            "Content-Type: text/plain; charset=iso-8859-1\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "Total =A31.00\r\n",
+            "--inner\r\n",
+            "Content-Type: text/html; charset=iso-8859-1\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "<p>Total =A31.00</p>\r\n",
+            "--inner--\r\n",
+            "--outer\r\n",
+            "Content-Type: application/pdf\r\n",
+            "Content-Disposition: attachment; filename=\"quote.pdf\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "JVBERi0xLjQgbm90IHJlYWxseQ==\r\n",
+            "--outer--\r\n",
+        );
+        assert_eq!(mime_bodies(raw.as_bytes()).unwrap(), ("Total £1.00".to_string(), "<p>Total £1.00</p>".to_string()));
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_mime_message_are_an_error() {
+        let unparsable = b" Subject: a folded line with nothing to fold onto\r\n\r\nHello";
+        let undecodable = concat!("Content-Type: text/plain\r\n", "Content-Transfer-Encoding: base64\r\n", "\r\n", "@@@@").as_bytes();
+        for raw in [&unparsable[..], undecodable] {
+            let e = mime_bodies(raw).unwrap_err().to_string();
+            assert!(e.starts_with("not a MIME message: "), "{e}");
+        }
+    }
+
+    #[tokio::test]
+    async fn both_readers_give_the_same_text_for_an_html_only_message() {
+        let spec = EmailSpec { expect: EmailExpect { body: Some(Matcher::Contains(Value::String("A Firm - £".into()))), ..Default::default() }, ..spec(5000) };
+        let from_postmark = read(&postmark("", HTML).await, &spec).await;
+        let from_mailpit = read(&mailpit(0, HTML_ONLY).await.0, &spec).await;
+        for out in [&from_postmark, &from_mailpit] {
+            assert!(out.error.is_none(), "{:?}", out.error);
+            assert_eq!(out.record.text, "A Firm - £1.00");
+            assert!(!out.record.checks.is_empty() && out.record.checks.iter().all(|c| c.ok), "{:?}", out.record.checks);
+        }
+    }
+
+    #[tokio::test]
+    async fn both_readers_give_the_same_text_for_a_text_and_html_message() {
+        let from_postmark = read(&postmark(TEXT, TEXT_HTML).await, &spec(5000)).await;
+        let from_mailpit = read(&mailpit(0, TEXT_AND_HTML).await.0, &spec(5000)).await;
+        for out in [&from_postmark, &from_mailpit] {
+            assert!(out.error.is_none(), "{:?}", out.error);
+            assert_eq!(out.record.text, TEXT);
+            assert_eq!(out.record.links, vec!["https://x.test/pay/1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_text_only_message_is_its_text() {
+        let out = read(&mailpit(0, TEXT_ONLY).await.0, &spec(5000)).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.record.text, "Hello Jane");
+        assert!(out.record.links.is_empty(), "{:?}", out.record.links);
+    }
+
+    #[tokio::test]
+    async fn a_listed_mailpit_message_is_read_once_its_source_is_ready() {
+        let (mb, reads) = mailpit(2, TEXT_ONLY).await;
+        let out = read(&mb, &spec(5000)).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.record.text, "Hello Jane");
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_message_over_the_size_limit_fails_at_once() {
+        let (mb, reads) = mailpit(0, vec![b'a'; RAW_LIMIT + 1]).await;
+        let out = read(&mb, &spec(5000)).await;
+        let e = out.error.expect("fails").message;
+        assert!(e.contains("could not read message m1: the message is larger than 16 MiB"), "{e}");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 }
