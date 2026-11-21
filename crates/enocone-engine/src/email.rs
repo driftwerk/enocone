@@ -369,8 +369,13 @@ async fn body(http: &reqwest::Client, mailbox: &Mailbox, id: &str) -> Result<(St
 fn mime_bodies(raw: &[u8]) -> Result<(String, String), MailError> {
     let invalid = |e: mailparse::MailParseError| MailError::from(format!("not a MIME message: {e}"));
     let mail = mailparse::parse_mail(raw).map_err(invalid)?;
-    let first = |mimetype: &str| content_parts(&mail).find(|p| p.ctype.mimetype == mimetype).map(ParsedMail::get_body).transpose().map(Option::unwrap_or_default).map_err(invalid);
+    let first = |mimetype: &str| content_parts(&mail).find(|p| p.ctype.mimetype == mimetype).map(part_text).transpose().map(Option::unwrap_or_default).map_err(invalid);
     Ok((first("text/plain")?, first("text/html")?))
+}
+
+fn part_text(part: &ParsedMail) -> Result<String, mailparse::MailParseError> {
+    let text = if part.ctype.params.contains_key("charset") { part.get_body()? } else { String::from_utf8(part.get_body_raw()?).or_else(|_| part.get_body())? };
+    Ok(text.replace("\r\n", "\n"))
 }
 
 fn content_parts<'a>(part: &'a ParsedMail<'a>) -> Box<dyn Iterator<Item = &'a ParsedMail<'a>> + 'a> {
@@ -789,5 +794,54 @@ mod tests {
         let e = out.error.expect("fails").message;
         assert!(e.contains("could not read message m1: the message is larger than 16 MiB"), "{e}");
         assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_parts_inside_an_attachment_are_never_the_bodies() {
+        let raw = concat!(
+            "Content-Type: multipart/mixed; boundary=\"outer\"\r\n",
+            "\r\n",
+            "--outer\r\n",
+            "Content-Type: multipart/alternative; boundary=\"inner\"\r\n",
+            "Content-Disposition: attachment; filename=\"forwarded\"\r\n",
+            "\r\n",
+            "--inner\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Attached text\r\n",
+            "--inner\r\n",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "\r\n",
+            "<p>Attached</p>\r\n",
+            "--inner--\r\n",
+            "--outer\r\n",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "\r\n",
+            "<p>Body</p>\r\n",
+            "--outer--\r\n",
+        );
+        assert_eq!(mime_bodies(raw.as_bytes()).unwrap(), (String::new(), "<p>Body</p>".to_string()));
+    }
+
+    #[test]
+    fn a_part_with_no_charset_is_read_as_utf8_when_it_is_utf8() {
+        let utf8 = concat!("Content-Type: text/html\r\n", "Content-Transfer-Encoding: 8bit\r\n", "\r\n", "<p>£1.00</p>").as_bytes();
+        assert_eq!(mime_bodies(utf8).unwrap(), (String::new(), "<p>£1.00</p>".to_string()));
+        let latin = b"Content-Type: text/plain\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\xA31.00";
+        assert_eq!(mime_bodies(latin).unwrap(), ("£1.00".to_string(), String::new()));
+    }
+
+    #[tokio::test]
+    async fn both_readers_give_the_same_lines_for_a_multi_line_text_part() {
+        let lines = "Your total is £1.00.\nThanks, A Firm";
+        let raw = concat!("Content-Type: text/plain; charset=utf-8\r\n", "Content-Transfer-Encoding: 8bit\r\n", "\r\n", "Your total is £1.00.\r\nThanks, A Firm").as_bytes();
+        let spec = EmailSpec { capture: vec![("total".into(), EmailCapture::Regex(r"(?m)total is (\S+)\.$".into()))], ..spec(5000) };
+        let from_postmark = read(&postmark(lines, "").await, &spec).await;
+        let from_mailpit = read(&mailpit(0, raw).await.0, &spec).await;
+        for out in [&from_postmark, &from_mailpit] {
+            assert!(out.error.is_none(), "{:?}", out.error);
+            assert_eq!(out.record.text, lines);
+            assert_eq!(out.captured, vec![("total".to_string(), Value::String("£1.00".into()))]);
+        }
     }
 }
