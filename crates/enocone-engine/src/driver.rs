@@ -28,7 +28,11 @@ pub struct Route {
 pub enum RouteAnswer {
     /// Fails the request, as a blocked host would.
     Abort,
-    Fulfil { status: u16, content_type: Option<String>, body: Arc<[u8]> },
+    Fulfil {
+        status: u16,
+        content_type: Option<String>,
+        body: Arc<[u8]>,
+    },
 }
 
 #[async_trait]
