@@ -1,0 +1,19 @@
+# Used by enocone's own suite (e2e/flows/run/network-routes.flow.md): the
+# fixture app's /reports page, with its data answered from a file and every
+# other API request aborted.
+project = "network-routes-fixture"
+default_env = "local"
+
+[run]
+timeout = "5s"
+
+[[run.routes]]
+url = "**/api/quarterly/*"
+fulfil = { file = "stubs/quarterly.json", content_type = "application/json" }
+
+[[run.routes]]
+url = "**/api/**"
+abort = true
+
+[env.local]
+WEB = "http://127.0.0.1:4010"

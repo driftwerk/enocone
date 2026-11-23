@@ -148,6 +148,32 @@ login that would sign in as a profile whose login is under way and waiting,
 directly or through other logins, on it fails at once with an error naming
 the chain of profiles, also when two flows start the loop from opposite ends.
 
+## Routed requests
+
+Pages often load services a suite must not call: ones that charge per call,
+send real messages or have no test environment. `[[run.routes]]` answers
+those requests in every browser session, so they never leave the browser:
+
+```toml
+[[run.routes]]
+url = "https://maps.example.com/api/js*"     # a Playwright URL glob
+fulfil = { file = "stubs/maps.js", content_type = "text/javascript" }
+
+[[run.routes]]
+url = "https://maps.example.com/**"
+abort = true
+```
+
+`fulfil` answers with a file relative to the project root, read when the
+project loads, with an optional `status` (default 200) and `content_type`.
+`abort = true` fails the request as a content blocker would. The first route
+that matches answers; anything else goes to the network. Route URLs are
+Playwright globs, unlike a `requests:` check's: `*` stops at `/` and `**`
+crosses it, so a check's `*/api/…` is `**/api/…` in a route, and a route
+that matches nothing lets the request through. `http` blocks are
+not routed. A route with no answer or two, an empty `url`, unbalanced or nested `{}`, a
+bad status or a missing file stops the project from loading.
+
 ## Tables of examples
 
 A rule with many cases can be one step with a Markdown table. The step's

@@ -66,7 +66,7 @@ async fn reports_page() -> Html<String> {
         r#"<h1>Reports</h1><p id=total>Loading…</p><button id=export>Export</button><p id=exported></p>
 <script>
 fetch('/api/quarterly/q1').then(r => r.json()).then(d => { document.getElementById('total').textContent = 'Total: ' + d.total; });
-document.getElementById('export').onclick = () => fetch('/api/export/scoped/q1.csv').then(r => r.text()).then(t => { document.getElementById('exported').textContent = 'Exported ' + t.split('\n').length + ' rows'; });
+document.getElementById('export').onclick = () => fetch('/api/export/scoped/q1.csv').then(r => r.text()).then(t => { document.getElementById('exported').textContent = 'Exported ' + t.split('\n').length + ' rows'; }, () => { document.getElementById('exported').textContent = 'Export failed'; });
 </script>"#,
     )
 }

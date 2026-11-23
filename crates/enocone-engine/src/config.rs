@@ -2,11 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use enocone_spec::design::Screen;
 use enocone_spec::{Diagnostic, Flow, Severity, parse_flow};
 use serde::Deserialize;
+
+use crate::driver::{Route, RouteAnswer};
 
 pub const CONFIG_FILE: &str = "enocone.toml";
 
@@ -111,6 +114,37 @@ pub struct RunConfig {
     /// agent dry-running one) can otherwise run anything on this machine.
     #[serde(default)]
     pub allow_exec: bool,
+    /// Requests every browser session answers itself instead of sending them
+    /// (`[[run.routes]]`), first match first.
+    #[serde(default)]
+    pub routes: Vec<RouteConfig>,
+}
+
+/// `[[run.routes]]`: requests matching `url`, a Playwright glob, are aborted
+/// (`abort = true`) or answered from a file (`fulfil`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteConfig {
+    pub url: String,
+    #[serde(default)]
+    pub abort: bool,
+    #[serde(default)]
+    pub fulfil: Option<FulfilConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FulfilConfig {
+    /// The response body, relative to the project root.
+    pub file: String,
+    #[serde(default = "default_status")]
+    pub status: u16,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+fn default_status() -> u16 {
+    200
 }
 
 impl Default for RunConfig {
@@ -125,6 +159,7 @@ impl Default for RunConfig {
             headless: true,
             insecure: false,
             allow_exec: false,
+            routes: Vec::new(),
         }
     }
 }
@@ -208,6 +243,39 @@ pub struct BrowserToken {
     pub refresh: Option<String>,
 }
 
+fn route(root: &Path, r: &RouteConfig) -> anyhow::Result<Route> {
+    if r.url.trim().is_empty() {
+        bail!("url is empty");
+    }
+    if !braces_balanced(&r.url) {
+        bail!("url has an unbalanced or nested `{{` `}}`");
+    }
+    let answer = match (r.abort, &r.fulfil) {
+        (true, None) => RouteAnswer::Abort,
+        (false, Some(f)) => {
+            if !(100..=599).contains(&f.status) {
+                bail!("fulfil.status {} is not an HTTP status", f.status);
+            }
+            let path = root.join(&f.file);
+            let body = std::fs::read(&path).with_context(|| format!("reading fulfil.file {}", path.display()))?;
+            RouteAnswer::Fulfil { status: f.status, content_type: f.content_type.clone(), body: body.into() }
+        }
+        _ => bail!("give exactly one of `abort = true` or `fulfil = {{ file = \"…\" }}`"),
+    };
+    Ok(Route { url: r.url.clone(), answer })
+}
+
+/// Playwright's globs take `{a,b}` alternatives, one level deep.
+fn braces_balanced(url: &str) -> bool {
+    let depth = url.chars().try_fold(0u8, |depth, c| match c {
+        '{' if depth == 0 => Some(1),
+        '}' if depth == 1 => Some(0),
+        '{' | '}' => None,
+        _ => Some(depth),
+    });
+    depth == Some(0)
+}
+
 /// Diagnostics tagged with the file they belong to.
 pub type FileDiagnostics = Vec<(String, Diagnostic)>;
 
@@ -216,6 +284,8 @@ pub type FileDiagnostics = Vec<(String, Diagnostic)>;
 pub struct Project {
     pub root: PathBuf,
     pub config: Config,
+    /// `[[run.routes]]`, each `fulfil` body read once, when the project loads.
+    pub routes: Arc<[Route]>,
 }
 
 impl Project {
@@ -247,7 +317,13 @@ impl Project {
             crate::email::Provider::parse(&e.provider).map_err(|m| anyhow::anyhow!("{}: [email] {m}", file.display()))?;
         }
         let root = file.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-        Ok(Project { root, config })
+        Project::new(root, config).map_err(|e| anyhow::anyhow!("{}: {e:#}", file.display()))
+    }
+
+    /// The project at `root`, with its routes' files read.
+    pub fn new(root: PathBuf, config: Config) -> anyhow::Result<Project> {
+        let routes = config.run.routes.iter().enumerate().map(|(i, r)| route(&root, r).with_context(|| format!("run.routes[{i}] ({})", r.url))).collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Project { root, config, routes: routes.into() })
     }
 
     pub fn flows_dir(&self) -> PathBuf {
@@ -488,6 +564,80 @@ fn tokens_to_vars(v: &serde_json::Value, path: &mut Vec<String>, out: &mut Vec<(
 
 #[cfg(test)]
 mod tests {
+    use super::{CONFIG_FILE, Project};
+    use crate::driver::{Route, RouteAnswer};
+
+    /// The project's routes, from a project holding `config` and `files`.
+    fn routes(config: &str, files: &[(&str, &str)]) -> anyhow::Result<Vec<Route>> {
+        let root = tempfile::tempdir().expect("tempdir");
+        for (name, body) in files {
+            std::fs::write(root.path().join(name), body).expect("write");
+        }
+        std::fs::write(root.path().join(CONFIG_FILE), format!("project = \"p\"\n{config}")).expect("write");
+        Ok(Project::load(&root.path().join(CONFIG_FILE))?.routes.to_vec())
+    }
+
+    #[test]
+    fn routes_keep_their_order_and_read_their_bodies() {
+        let routes = routes(
+            r#"
+            [[run.routes]]
+            url = "https://maps.example/api/js*"
+            fulfil = { file = "stub.js", content_type = "text/javascript" }
+            [[run.routes]]
+            url = "https://maps.example/**"
+            abort = true
+            [[run.routes]]
+            url = "**/gone"
+            fulfil = { file = "stub.js", status = 410 }
+            "#,
+            &[("stub.js", "window.stub = 1;")],
+        )
+        .expect("routes");
+        let body: std::sync::Arc<[u8]> = b"window.stub = 1;".as_slice().into();
+        assert_eq!(
+            routes,
+            vec![
+                Route { url: "https://maps.example/api/js*".into(), answer: RouteAnswer::Fulfil { status: 200, content_type: Some("text/javascript".into()), body: body.clone() } },
+                Route { url: "https://maps.example/**".into(), answer: RouteAnswer::Abort },
+                Route { url: "**/gone".into(), answer: RouteAnswer::Fulfil { status: 410, content_type: None, body } },
+            ]
+        );
+    }
+
+    #[test]
+    fn alternatives_are_allowed() {
+        assert_eq!(routes("[[run.routes]]\nurl = \"**/*.{png,jpg}\"\nabort = true", &[]).expect("routes").len(), 1);
+    }
+
+    #[test]
+    fn no_routes_by_default() {
+        assert_eq!(routes("", &[]).expect("routes"), vec![]);
+    }
+
+    #[test]
+    fn a_route_needs_exactly_one_answer() {
+        for (route, message) in [
+            ("url = \"**/a\"", "run.routes[0] (**/a): give exactly one of `abort = true` or `fulfil = { file = \"…\" }`"),
+            ("url = \"**/a\"\nabort = false", "run.routes[0] (**/a): give exactly one of `abort = true` or `fulfil = { file = \"…\" }`"),
+            ("url = \"**/a\"\nabort = true\nfulfil = { file = \"stub.js\" }", "run.routes[0] (**/a): give exactly one of `abort = true` or `fulfil = { file = \"…\" }`"),
+            ("url = \" \"\nabort = true", "run.routes[0] ( ): url is empty"),
+            ("url = \"**/a\"\nfulfil = { file = \"stub.js\", status = 42 }", "run.routes[0] (**/a): fulfil.status 42 is not an HTTP status"),
+            ("url = \"**/{a,b\"\nabort = true", "run.routes[0] (**/{a,b): url has an unbalanced or nested `{` `}`"),
+            ("url = \"**/a}\"\nabort = true", "run.routes[0] (**/a}): url has an unbalanced or nested `{` `}`"),
+            ("url = \"**/{a,{b}}\"\nabort = true", "run.routes[0] (**/{a,{b}}): url has an unbalanced or nested `{` `}`"),
+        ] {
+            let error = routes(&format!("[[run.routes]]\n{route}"), &[("stub.js", "")]).expect_err(route);
+            assert!(format!("{error:#}").ends_with(message), "{route}: {error:#}");
+        }
+    }
+
+    #[test]
+    fn a_fulfil_file_must_exist() {
+        let error = routes("[[run.routes]]\nurl = \"**/a\"\nfulfil = { file = \"missing.js\" }", &[]).expect_err("missing file");
+        assert!(format!("{error:#}").contains("run.routes[0] (**/a): reading fulfil.file "), "{error:#}");
+    }
+
     #[test]
     fn design_tokens_become_css_variables() {
         let v: serde_json::Value = serde_json::from_str(r##"{"color":{"$type":"color","primary":{"$value":"#1D4BE5"},"accent":{"$value":"{color.primary}"}},"space":{"md":{"$value":{"value":12,"unit":"px"}}},"font":{"body":{"$value":["Inter","Helvetica Neue"]}}}"##).unwrap();

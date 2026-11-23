@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use crate::auth::{AuthState, Need, Next, ProfileAuth, SIGN_IN_STEPS, outcome_of};
 use crate::browser::{Timeouts, run_browser};
 use crate::config::{AuthProfile, BrowserToken, Project, Screenshots};
-use crate::driver::{Driver, Session, SessionOptions};
+use crate::driver::{Driver, Route, Session, SessionOptions};
 use crate::email::{Mailbox, Provider, run_email};
 use crate::exec::run_exec;
 use crate::http::{json_at, run_http};
@@ -37,6 +37,8 @@ pub struct RunOptions {
     pub navigation_timeout: Duration,
     pub screenshots: Screenshots,
     pub insecure: bool,
+    /// `[[run.routes]]`, given to every browser session.
+    pub routes: Arc<[Route]>,
     /// Run against a prototype served at this origin: draft flows run, http and
     /// exec blocks are skipped, and `sample:` values stand in for their captures.
     pub prototype: Option<String>,
@@ -55,6 +57,7 @@ impl RunOptions {
             navigation_timeout: parse_duration_str(&rc.navigation_timeout).map_err(|e| anyhow!("run.navigation_timeout: {e}"))?,
             screenshots: rc.screenshots,
             insecure: rc.insecure,
+            routes: Arc::clone(&project.routes),
             prototype: None,
         })
     }
@@ -238,7 +241,7 @@ impl Engine {
                 Some(a.storage.ok_or_else(|| anyhow!("auth profile `{p}` is not a browser login"))?)
             }
         };
-        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
+        open_browser(driver, SessionOptions { storage_state: storage, routes: Arc::clone(&self.opts.routes) }, self.opts.timeout).await?.into_session()
     }
 
     /// The project's `[email]` mailbox, with templates (secrets) filled in.
@@ -784,7 +787,7 @@ impl Engine {
             }
             a.storage
         };
-        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
+        open_browser(driver, SessionOptions { storage_state: storage, routes: Arc::clone(&self.opts.routes) }, self.opts.timeout).await?.into_session()
     }
 
     /// The `Cookie` header a signed-in browser would send to `url`: from the
@@ -921,7 +924,7 @@ impl Engine {
         let timeout = self.opts.timeout;
         let deadline = tokio::time::Instant::now() + timeout;
         let refreshed = tokio::time::timeout_at(deadline, async {
-            let browser = open_browser(driver, SessionOptions { storage_state: state.storage.clone() }, timeout).await?;
+            let browser = open_browser(driver, SessionOptions { storage_state: state.storage.clone(), routes: Arc::clone(&self.opts.routes) }, timeout).await?;
             let session = browser.session()?;
             // The fetch needs only a committed document on the token's own URL, not a loaded page.
             session.goto_committed(&url, self.opts.navigation_timeout).await?;
@@ -988,7 +991,7 @@ impl Engine {
                     bail!(login_loop(&path));
                 }
                 let params = params.iter().map(|(k, v)| Ok((k.clone(), self.render_str(v)?))).collect::<anyhow::Result<Vec<_>>>()?;
-                let browser = open_browser(driver, SessionOptions::default(), self.opts.timeout).await?;
+                let browser = open_browser(driver, SessionOptions { storage_state: None, routes: Arc::clone(&self.opts.routes) }, self.opts.timeout).await?;
                 let mut st = FlowState {
                     vars: self.vars(0),
                     sessions: HashMap::new(),
@@ -1264,6 +1267,8 @@ mod auth_tests {
         release: Notify,
         evals: AtomicUsize,
         navigations: StdMutex<Vec<String>>,
+        /// The routes each session was opened with.
+        routed: StdMutex<Vec<Arc<[Route]>>>,
         login_fails: bool,
         hangs: &'static [Hang],
         /// When set, each sign-in's first page load waits until this many have started.
@@ -1332,6 +1337,7 @@ mod auth_tests {
         }
         async fn new_session(&self, options: SessionOptions) -> anyhow::Result<Box<dyn Session>> {
             self.0.opens.fetch_add(1, Ordering::SeqCst);
+            self.0.routed.lock().expect("routed").push(Arc::clone(&options.routes));
             let refresh = options.storage_state.is_some();
             if (refresh && self.0.hangs.contains(&Hang::Open)) || (!refresh && self.0.hangs.contains(&Hang::OpenWithoutStorage)) {
                 self.0.release.notified().await;
@@ -1470,7 +1476,7 @@ mod auth_tests {
             "#
         ))
         .expect("config");
-        let project = Project { root: root.path().to_path_buf(), config };
+        let project = Project::new(root.path().to_path_buf(), config).expect("project");
         let opts = RunOptions::from_project(&project, "local".into(), root.path().join("out")).expect("options");
         let browser = Arc::new(FakeBrowser {
             opens: AtomicUsize::new(0),
@@ -1480,6 +1486,7 @@ mod auth_tests {
             release: Notify::new(),
             evals: AtomicUsize::new(0),
             navigations: StdMutex::new(vec![]),
+            routed: StdMutex::new(vec![]),
             login_fails,
             hangs,
             logins_meet: (logins_meet > 0).then(|| Barrier::new(logins_meet)),
@@ -1555,6 +1562,18 @@ mod auth_tests {
         assert_eq!(c.err().as_deref(), Some(failed.as_str()));
         assert_eq!((f.browser.opened(), f.browser.evals()), (2, 2), "one sign-in and one refresh");
         f.browser.assert_each_closed_once().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_session_is_opened_with_the_projects_routes() {
+        let f = fixture(Setup { refresh: "0s", config: "[[run.routes]]\nurl = \"**/paid/**\"\nabort = true", ..Setup::default() }, token);
+        f.token("web").await.expect("signs in");
+        f.token("web").await.expect("refreshes");
+        drop(f.engine.open_session(Some("web")).await.expect("explores"));
+        let routes: Arc<[Route]> = vec![Route { url: "**/paid/**".into(), answer: crate::driver::RouteAnswer::Abort }].into();
+        let routed = f.browser.routed.lock().expect("routed").clone();
+        assert!(routed.len() >= 3, "the sign-in, the refresh and the exploring session: {routed:?}");
+        assert!(routed.iter().all(|r| *r == routes), "{routed:?}");
     }
 
     #[tokio::test(start_paused = true)]
