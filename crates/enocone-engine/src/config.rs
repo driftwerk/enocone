@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use enocone_spec::design::Screen;
@@ -242,6 +243,39 @@ pub struct BrowserToken {
     pub refresh: Option<String>,
 }
 
+fn route(root: &Path, r: &RouteConfig) -> anyhow::Result<Route> {
+    if r.url.trim().is_empty() {
+        bail!("url is empty");
+    }
+    if !braces_balanced(&r.url) {
+        bail!("url has an unbalanced or nested `{{` `}}`");
+    }
+    let answer = match (r.abort, &r.fulfil) {
+        (true, None) => RouteAnswer::Abort,
+        (false, Some(f)) => {
+            if !(100..=599).contains(&f.status) {
+                bail!("fulfil.status {} is not an HTTP status", f.status);
+            }
+            let path = root.join(&f.file);
+            let body = std::fs::read(&path).with_context(|| format!("reading fulfil.file {}", path.display()))?;
+            RouteAnswer::Fulfil { status: f.status, content_type: f.content_type.clone(), body: body.into() }
+        }
+        _ => bail!("give exactly one of `abort = true` or `fulfil = {{ file = \"…\" }}`"),
+    };
+    Ok(Route { url: r.url.clone(), answer })
+}
+
+/// Playwright's globs take `{a,b}` alternatives, one level deep.
+fn braces_balanced(url: &str) -> bool {
+    let depth = url.chars().try_fold(0u8, |depth, c| match c {
+        '{' if depth == 0 => Some(1),
+        '}' if depth == 1 => Some(0),
+        '{' | '}' => None,
+        _ => Some(depth),
+    });
+    depth == Some(0)
+}
+
 /// Diagnostics tagged with the file they belong to.
 pub type FileDiagnostics = Vec<(String, Diagnostic)>;
 
@@ -250,6 +284,8 @@ pub type FileDiagnostics = Vec<(String, Diagnostic)>;
 pub struct Project {
     pub root: PathBuf,
     pub config: Config,
+    /// `[[run.routes]]`, each `fulfil` body read once, when the project loads.
+    pub routes: Arc<[Route]>,
 }
 
 impl Project {
@@ -281,33 +317,13 @@ impl Project {
             crate::email::Provider::parse(&e.provider).map_err(|m| anyhow::anyhow!("{}: [email] {m}", file.display()))?;
         }
         let root = file.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-        let project = Project { root, config };
-        project.routes().map_err(|e| anyhow::anyhow!("{}: {e:#}", file.display()))?;
-        Ok(project)
+        Project::new(root, config).map_err(|e| anyhow::anyhow!("{}: {e:#}", file.display()))
     }
 
-    /// `[[run.routes]]`, with each `fulfil` body read from its file.
-    pub fn routes(&self) -> anyhow::Result<Vec<Route>> {
-        self.config.run.routes.iter().enumerate().map(|(i, r)| self.route(r).with_context(|| format!("run.routes[{i}] ({})", r.url))).collect()
-    }
-
-    fn route(&self, r: &RouteConfig) -> anyhow::Result<Route> {
-        if r.url.trim().is_empty() {
-            bail!("url is empty");
-        }
-        let answer = match (r.abort, &r.fulfil) {
-            (true, None) => RouteAnswer::Abort,
-            (false, Some(f)) => {
-                if !(100..=599).contains(&f.status) {
-                    bail!("fulfil.status {} is not an HTTP status", f.status);
-                }
-                let path = self.root.join(&f.file);
-                let body = std::fs::read(&path).with_context(|| format!("reading fulfil.file {}", path.display()))?;
-                RouteAnswer::Fulfil { status: f.status, content_type: f.content_type.clone(), body: body.into() }
-            }
-            _ => bail!("give exactly one of `abort = true` or `fulfil = {{ file = \"…\" }}`"),
-        };
-        Ok(Route { url: r.url.clone(), answer })
+    /// The project at `root`, with its routes' files read.
+    pub fn new(root: PathBuf, config: Config) -> anyhow::Result<Project> {
+        let routes = config.run.routes.iter().enumerate().map(|(i, r)| route(&root, r).with_context(|| format!("run.routes[{i}] ({})", r.url))).collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Project { root, config, routes: routes.into() })
     }
 
     pub fn flows_dir(&self) -> PathBuf {
@@ -558,7 +574,7 @@ mod tests {
             std::fs::write(root.path().join(name), body).expect("write");
         }
         std::fs::write(root.path().join(CONFIG_FILE), format!("project = \"p\"\n{config}")).expect("write");
-        Project::load(&root.path().join(CONFIG_FILE))?.routes()
+        Ok(Project::load(&root.path().join(CONFIG_FILE))?.routes.to_vec())
     }
 
     #[test]
@@ -590,6 +606,11 @@ mod tests {
     }
 
     #[test]
+    fn alternatives_are_allowed() {
+        assert_eq!(routes("[[run.routes]]\nurl = \"**/*.{png,jpg}\"\nabort = true", &[]).expect("routes").len(), 1);
+    }
+
+    #[test]
     fn no_routes_by_default() {
         assert_eq!(routes("", &[]).expect("routes"), vec![]);
     }
@@ -602,6 +623,9 @@ mod tests {
             ("url = \"**/a\"\nabort = true\nfulfil = { file = \"stub.js\" }", "run.routes[0] (**/a): give exactly one of `abort = true` or `fulfil = { file = \"…\" }`"),
             ("url = \" \"\nabort = true", "run.routes[0] ( ): url is empty"),
             ("url = \"**/a\"\nfulfil = { file = \"stub.js\", status = 42 }", "run.routes[0] (**/a): fulfil.status 42 is not an HTTP status"),
+            ("url = \"**/{a,b\"\nabort = true", "run.routes[0] (**/{a,b): url has an unbalanced or nested `{` `}`"),
+            ("url = \"**/a}\"\nabort = true", "run.routes[0] (**/a}): url has an unbalanced or nested `{` `}`"),
+            ("url = \"**/{a,{b}}\"\nabort = true", "run.routes[0] (**/{a,{b}}): url has an unbalanced or nested `{` `}`"),
         ] {
             let error = routes(&format!("[[run.routes]]\n{route}"), &[("stub.js", "")]).expect_err(route);
             assert!(format!("{error:#}").ends_with(message), "{route}: {error:#}");

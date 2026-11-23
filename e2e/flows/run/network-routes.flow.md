@@ -11,13 +11,13 @@ stage: implemented
 Some services a page loads cost money per call, send real messages, or
 have no test environment. A suite that opens those pages calls them on
 every run. A project can instead answer such requests with a file, or fail
-them as a blocked host would, so the browser never sends them.
+them as a content blocker would, so the browser never sends them.
 
 ```flowchart
 flowchart LR
   1[A project routes the reports API to a file and aborts the rest of the API] --> 2[A flow opens the reports page and exports]
   2 --> 3[The page shows the file's data: the first matching route answered]
-  2 --> 4[The export request failed in the browser and reached no server]
+  2 --> 4[The export failed in the page and reached no server]
   1 -.->|a route with two answers| 5[The project is refused before anything runs]
 ```
 
@@ -40,14 +40,17 @@ flowchart LR
 - `fulfil` answers with the file's bytes, read when the project loads, and
   an optional `status` (200 unless given) and `content_type`. The file is
   relative to the project root.
-- `abort = true` fails the request in the browser, as a blocked host would.
+- `abort = true` fails the request in the browser, as a content blocker
+  would.
 - The first route in the file that matches a request answers it. Requests
-  no route matches go to the network as before.
+  no route matches go to the network as before, so a route whose glob
+  matches nothing protects nothing: a `requests:` check's `*/api/…` is
+  `**/api/…` in a route.
 - Routes apply to every browser session, signed in or not. `http` blocks
   are not routed.
-- A route with no answer, with both, with an empty `url`, a status outside
-  100–599 or a `fulfil` file that can't be read is refused when the project
-  loads, naming the route.
+- A route with no answer, with both, with an empty `url`, with unbalanced
+  or nested `{}`, with a status outside 100–599 or with a `fulfil` file
+  that can't be read is refused when the project loads, naming the route.
 
 ## Given
 
@@ -82,18 +85,18 @@ flowchart LR
    expect:
      json:
        "$.flows[0].attempts[0].steps[0].status": passed
-       "$.flows[0].attempts[0].steps[0].records[3].requests[0]": "*/api/quarterly/* (count 1, status 200): 1 matched"
-       "$.flows[0].attempts[0].steps[0].records[3].requests[1]": "  GET http://127.0.0.1:4010/api/quarterly/q1 200"
+       "$.flows[0].attempts[0].steps[0].records[4].requests[0]": "*/api/quarterly/* (count 1, status 200): 1 matched"
+       "$.flows[0].attempts[0].steps[0].records[4].requests[1]": "  GET http://127.0.0.1:4010/api/quarterly/q1 200"
    ```
 
-4. **The export request failed in the browser**
+4. **The export failed in the page: its request was aborted in the browser**
    ```exec
    # Check what the export pattern matched
    run: cat "{{run.tmp}}/out/results.json"
    expect:
      json:
-       "$.flows[0].attempts[0].steps[0].records[3].requests[2]": "*/api/export* (count 1): 1 matched"
-       "$.flows[0].attempts[0].steps[0].records[3].requests[3]": "  GET http://127.0.0.1:4010/api/export/scoped/q1.csv failed"
+       "$.flows[0].attempts[0].steps[0].records[4].requests[2]": "*/api/export* (count 1): 1 matched"
+       "$.flows[0].attempts[0].steps[0].records[4].requests[3]": "  GET http://127.0.0.1:4010/api/export/scoped/q1.csv failed"
    ```
 
 5. **A project whose route has two answers is refused before anything runs, naming the route**

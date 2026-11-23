@@ -26,7 +26,7 @@ pub struct Route {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteAnswer {
-    /// Fails the request, as a blocked host would.
+    /// Fails the request, as a content blocker would.
     Abort,
     Fulfil {
         status: u16,

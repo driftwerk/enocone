@@ -191,7 +191,10 @@ least one request must match. It waits for requests in flight first.
 Requests a page must never send (a paid or live service) are answered by
 the project, not the flow: `[[run.routes]]` in `enocone.toml`, each a `url`
 (Playwright glob) with `abort = true` or `fulfil = { file = "…" }`, first
-match first. A routed request shows up here, aborted ones as `failed`.
+match first. Route URLs are Playwright globs: `*` stops at `/`, so this
+check's `*/api/…` is `**/api/…` in a route, and a route that matches
+nothing lets the request through. A routed request shows up here, aborted
+ones as `failed`.
 
 ### `expect`
 

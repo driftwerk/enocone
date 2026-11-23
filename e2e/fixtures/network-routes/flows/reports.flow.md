@@ -14,6 +14,7 @@ Used by enocone's own suite.
    - goto: "{{env.WEB}}/reports"
    - expect: { text: "Total: 7" }
    - click: Export
+   - expect: { text: Export failed }
    - requests:
        - url: "*/api/quarterly/*"
          expect: { count: 1, status: 200 }

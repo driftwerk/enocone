@@ -166,10 +166,13 @@ abort = true
 
 `fulfil` answers with a file relative to the project root, read when the
 project loads, with an optional `status` (default 200) and `content_type`.
-`abort = true` fails the request as a blocked host would. The first route
-that matches answers; anything else goes to the network. `http` blocks are
-not routed. A route with no answer or two, an empty `url`, a bad status or a
-missing file stops the project from loading.
+`abort = true` fails the request as a content blocker would. The first route
+that matches answers; anything else goes to the network. Route URLs are
+Playwright globs, unlike a `requests:` check's: `*` stops at `/` and `**`
+crosses it, so a check's `*/api/…` is `**/api/…` in a route, and a route
+that matches nothing lets the request through. `http` blocks are
+not routed. A route with no answer or two, an empty `url`, unbalanced or nested `{}`, a
+bad status or a missing file stops the project from loading.
 
 ## Tables of examples
 

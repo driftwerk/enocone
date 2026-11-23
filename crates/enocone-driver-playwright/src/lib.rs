@@ -141,7 +141,7 @@ async fn add_routes(ctx: &BrowserContext, routes: &[Route]) -> anyhow::Result<()
             }
         })
         .await
-        .with_context(|| format!("routing {}", route.url))?;
+        .map_err(|e| anyhow!("routing {}: {}", route.url, clean(e)))?;
     }
     Ok(())
 }
