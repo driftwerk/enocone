@@ -2,6 +2,7 @@
 //! any automation tool can be plugged in: Playwright (default), raw CDP,
 //! WebDriver BiDi, or an external process speaking the same operations.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,6 +13,22 @@ use serde_json::Value;
 pub struct SessionOptions {
     /// Cookies and local storage from a signed-in session (driver-specific JSON).
     pub storage_state: Option<Value>,
+    /// Requests the session answers itself, first match first.
+    pub routes: Arc<[Route]>,
+}
+
+/// Requests whose URL matches `url` (a Playwright glob) never reach the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    pub url: String,
+    pub answer: RouteAnswer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteAnswer {
+    /// Fails the request, as a blocked host would.
+    Abort,
+    Fulfil { status: u16, content_type: Option<String>, body: Arc<[u8]> },
 }
 
 #[async_trait]

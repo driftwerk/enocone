@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use enocone_engine::driver::{Driver, NetRequest, Session, SessionOptions, UiAction, UiQuery};
+use enocone_engine::driver::{Driver, NetRequest, Route, RouteAnswer, Session, SessionOptions, UiAction, UiQuery};
 use enocone_spec::blocks::{By, Locator};
-use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport, WaitUntil};
+use playwright_rs::protocol::{BrowserContext, BrowserContextOptions, FulfillOptions, GotoOptions, Locator as PwLocator, Page, StorageState, Viewport, WaitUntil};
 use playwright_rs::server::channel_owner::ChannelOwner;
 use playwright_rs::{LaunchOptions, Playwright};
 use serde_json::Value;
@@ -66,6 +66,7 @@ impl Driver for PlaywrightDriver {
             b = b.storage_state(state);
         }
         let ctx = self.browser.new_context_with_options(b.build()).await?;
+        add_routes(&ctx, &opts.routes).await?;
         let page = ctx.new_page().await?;
         let console = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&console);
@@ -116,6 +117,33 @@ impl Driver for PlaywrightDriver {
         self.browser.close().await?;
         Ok(())
     }
+}
+
+/// Playwright tries the route added last first, so the routes are added in
+/// reverse and the first that matches answers.
+async fn add_routes(ctx: &BrowserContext, routes: &[Route]) -> anyhow::Result<()> {
+    for route in routes.iter().rev() {
+        let answer = route.answer.clone();
+        ctx.route(&route.url, move |r| {
+            let answer = answer.clone();
+            async move {
+                match answer {
+                    RouteAnswer::Abort => r.abort(Some("blockedbyclient")).await,
+                    RouteAnswer::Fulfil { status, content_type, body } => {
+                        let options = FulfillOptions::builder().status(status).body(body.to_vec());
+                        let options = match content_type {
+                            Some(c) => options.content_type(c),
+                            None => options,
+                        };
+                        r.fulfill(options.build()).await
+                    }
+                }
+            }
+        })
+        .await
+        .with_context(|| format!("routing {}", route.url))?;
+    }
+    Ok(())
 }
 
 /// Requests seen, keyed by Playwright's id for each.

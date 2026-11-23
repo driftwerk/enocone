@@ -188,6 +188,11 @@ are recorded; URLs are masked):
 `count` is a number or a comparison (`">=1"`, `"<3"`); without one, at
 least one request must match. It waits for requests in flight first.
 
+Requests a page must never send (a paid or live service) are answered by
+the project, not the flow: `[[run.routes]]` in `enocone.toml`, each a `url`
+(Playwright glob) with `abort = true` or `fulfil = { file = "…" }`, first
+match first. A routed request shows up here, aborted ones as `failed`.
+
 ### `expect`
 
 Shorthand for a single browser expectation (same keys as above):

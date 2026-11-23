@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use crate::auth::{AuthState, Need, Next, ProfileAuth, SIGN_IN_STEPS, outcome_of};
 use crate::browser::{Timeouts, run_browser};
 use crate::config::{AuthProfile, BrowserToken, Project, Screenshots};
-use crate::driver::{Driver, Session, SessionOptions};
+use crate::driver::{Driver, Route, Session, SessionOptions};
 use crate::email::{Mailbox, Provider, run_email};
 use crate::exec::run_exec;
 use crate::http::{json_at, run_http};
@@ -37,6 +37,8 @@ pub struct RunOptions {
     pub navigation_timeout: Duration,
     pub screenshots: Screenshots,
     pub insecure: bool,
+    /// `[[run.routes]]`, given to every browser session.
+    pub routes: Arc<[Route]>,
     /// Run against a prototype served at this origin: draft flows run, http and
     /// exec blocks are skipped, and `sample:` values stand in for their captures.
     pub prototype: Option<String>,
@@ -55,6 +57,7 @@ impl RunOptions {
             navigation_timeout: parse_duration_str(&rc.navigation_timeout).map_err(|e| anyhow!("run.navigation_timeout: {e}"))?,
             screenshots: rc.screenshots,
             insecure: rc.insecure,
+            routes: project.routes()?.into(),
             prototype: None,
         })
     }
@@ -238,7 +241,7 @@ impl Engine {
                 Some(a.storage.ok_or_else(|| anyhow!("auth profile `{p}` is not a browser login"))?)
             }
         };
-        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
+        open_browser(driver, SessionOptions { storage_state: storage, routes: Arc::clone(&self.opts.routes) }, self.opts.timeout).await?.into_session()
     }
 
     /// The project's `[email]` mailbox, with templates (secrets) filled in.
@@ -784,7 +787,7 @@ impl Engine {
             }
             a.storage
         };
-        open_browser(driver, SessionOptions { storage_state: storage }, self.opts.timeout).await?.into_session()
+        open_browser(driver, SessionOptions { storage_state: storage, routes: Arc::clone(&self.opts.routes) }, self.opts.timeout).await?.into_session()
     }
 
     /// The `Cookie` header a signed-in browser would send to `url`: from the
@@ -921,7 +924,7 @@ impl Engine {
         let timeout = self.opts.timeout;
         let deadline = tokio::time::Instant::now() + timeout;
         let refreshed = tokio::time::timeout_at(deadline, async {
-            let browser = open_browser(driver, SessionOptions { storage_state: state.storage.clone() }, timeout).await?;
+            let browser = open_browser(driver, SessionOptions { storage_state: state.storage.clone(), routes: Arc::clone(&self.opts.routes) }, timeout).await?;
             let session = browser.session()?;
             // The fetch needs only a committed document on the token's own URL, not a loaded page.
             session.goto_committed(&url, self.opts.navigation_timeout).await?;
